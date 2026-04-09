@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PDF OCR Studio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <div class="bg-noise" aria-hidden="true"></div>
+  <main class="app-shell">
+    <header class="hero">
+      <p class="tag">OCR WORKFLOW</p>
+      <h1>PDF OCR Studio</h1>
+      <p class="subtitle">Drag and drop PDF/gambar, proses OCR, lalu salin hasil teks dalam hitungan detik.</p>
+    </header>
+
+    <section class="panel uploader-panel">
+      <div id="dropZone" class="dropzone" tabindex="0" role="button" aria-label="Drop file for OCR">
+        <div class="dropzone-inner">
+          <p class="drop-main">Drop file di sini</p>
+          <p class="drop-sub">atau klik untuk pilih file PDF/JPG/PNG</p>
+        </div>
+      </div>
+      <input id="fileInput" name="file" type="file" accept=".pdf,.png,.jpg,.jpeg,.bmp,.tif,.tiff,.webp" hidden />
+
+      <form id="ocrForm" class="controls" action="/api/ocr" method="post" enctype="multipart/form-data">
+        <label for="langInput">Language OCR</label>
+        <input id="langInput" name="lang" type="text" placeholder="eng atau eng+ind" value="eng" />
+        <div class="button-group">
+          <button id="runBtn" type="submit">Run OCR</button>
+          <button id="compressBtn" type="button" class="secondary">Run Compress</button>
+        </div>
+      </form>
+
+      <div id="fileMeta" class="file-meta empty">Belum ada file dipilih.</div>
+      <div id="status" class="status"></div>
+    </section>
+
+    <section id="resultPanel" class="panel result-panel hidden">
+      <div class="result-head">
+        <h2>Hasil OCR</h2>
+        <button id="copyAllBtn" type="button">Copy Semua</button>
+      </div>
+      <div id="stats" class="stats"></div>
+      <div id="resultList" class="result-list"></div>
+    </section>
+  </main>
+
+  <script src="/app.js" defer></script>
+</body>
+</html>
