@@ -1,8 +1,0 @@
-pypdf
-pytest
-fastapi
-uvicorn
-python-multipart
-pillow
-pytesseract
-pymupdf

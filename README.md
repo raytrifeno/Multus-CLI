@@ -1,127 +1,143 @@
-# PDF Split Tool + OCR UI
+# Multus (Rust CLI)
 
-Toolkit ini punya dua fitur:
+Multus is a pure Rust CLI toolkit for PDF/document workflows. **All web features have been removed**.
 
-- Split PDF per range via CLI.
-- OCR modern berbasis web UI drag-and-drop.
+Available features:
 
-## Setup
+- Split PDF by page ranges.
+- Compress PDF.
+- Merge multiple PDFs.
+- Encrypt PDF (password protect).
+- Convert images to PDF.
+- Add text watermark to PDF and DOCX.
+- Reorder PDF pages.
 
-Aktifkan venv dan install dependency:
+## Install (recommended)
 
-```powershell
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-```
+Repository source:
 
-## Prasyarat OCR (Tesseract)
+`https://github.com/raytrifeno/scraks.git`
 
-Fitur OCR memakai `pytesseract` dengan engine Tesseract (native C/C++).
-
-Windows (winget):
-
-```powershell
-winget install UB-Mannheim.TesseractOCR
-```
-
-Setelah install, buka terminal baru agar PATH ter-refresh.
-
-Verifikasi:
+### Windows (PowerShell + iwr)
 
 ```powershell
-tesseract --version
+iwr https://raw.githubusercontent.com/raytrifeno/scraks/main/scripts/install.ps1 -UseBasicParsing | iex
 ```
 
-Jika command belum dikenali, set manual:
+### macOS / Linux
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/raytrifeno/scraks/main/scripts/install.sh | sh
+```
+
+Installer behavior:
+
+- Checks whether Rust/Cargo already exists.
+- Installs Rust only when missing.
+- Installs the CLI command as: `multus`.
+
+## Build from source
 
 ```powershell
-$env:TESSERACT_CMD="C:\Program Files\Tesseract-OCR\tesseract.exe"
+cargo build --release
 ```
 
-## Install CLI (pipx/pip)
+## Usage
 
-Jika ingin menjalankan dari mana saja dengan command `pdf`:
+Run without arguments (interactive mode):
 
 ```powershell
-pipx install -e C:\Users\raysu\Downloads\split
+multus
 ```
 
-Atau dengan pip (butuh aktivasi venv dulu):
+or from source:
 
 ```powershell
-.\.venv\Scripts\Activate.ps1
-pip install -e .
+cargo run
 ```
 
-Setelah itu, jalankan CLI split:
+Interactive mode:
+
+- Use arrow keys (`↑` / `↓`) to move.
+- Selected option is highlighted in orange.
+- Press `Enter` to choose.
+- Press `Q` twice in menu to exit.
+- Type `QQ` in any interactive prompt to return to menu.
+
+Split:
 
 ```powershell
-pdf
+multus split -i "C:\data\example.pdf" -p "1-5,8,10-12"
 ```
 
-Untuk OCR UI:
+Compress:
 
 ```powershell
-pdf-ocr-ui
+multus compress -i "C:\data\example.pdf" -l 2 -o "C:\data\compressed.pdf"
 ```
 
-Lalu buka browser ke `http://127.0.0.1:8787`.
+Compression levels:
 
-## Pemakaian
+- `-l 1` = light (higher quality, smaller reduction)
+- `-l 2` = balanced (default)
+- `-l 3` = aggressive (smaller files, more image quality loss)
+
+Note: if compressed output is larger, Multus automatically keeps the original size.
+
+Merge:
 
 ```powershell
-python main.py -i "C:\data\contoh.pdf" -p "1-5,8,10-12"
+multus merge -i "C:\data\a.pdf" "C:\data\b.pdf" -o "C:\data\merged.pdf"
 ```
 
-Output default ada di folder saat ini. Bisa override dengan `-o`:
+Encrypt:
 
 ```powershell
-python main.py -i "..\file.pdf" -p "2,4-6" -o "D:\output\hasil"
+multus encrypt -i "C:\data\example.pdf" -p "password123" -o "C:\data\example_encrypted.pdf"
 ```
 
-Jika dijalankan tanpa argumen, program akan meminta input secara interaktif.
-
-## OCR Drag & Drop UI
-
-Menjalankan tanpa install global:
+Images to PDF:
 
 ```powershell
-.\.venv\Scripts\Activate.ps1
-uvicorn ocr_app:app --host 127.0.0.1 --port 8787 --reload
+multus images-to-pdf -i "C:\img\1.jpg" "C:\img\2.png" -o "C:\img\result.pdf"
 ```
 
-Fitur UI:
-
-- Drag and drop file PDF/gambar.
-- OCR per halaman untuk PDF.
-- Copy hasil per halaman atau copy semua.
-- Input bahasa OCR (default `eng`; bisa `eng+ind` jika language pack tersedia).
-
-## Format Halaman
-
-Gunakan format `1-5,8,10-12`.
-
-## Error Handling
-
-Tool akan mengeluarkan error jika:
-
-- File tidak ditemukan.
-- File bukan PDF atau rusak.
-- Halaman di luar rentang.
-- Output path tidak valid.
-
-## Unit Test
+Watermark:
 
 ```powershell
-pytest -q
+multus watermark -i "C:\data\example.pdf" -t "CONFIDENTIAL" -o "C:\data\example_watermarked.pdf"
 ```
 
-## Contoh Output
+```powershell
+multus watermark -i "C:\data\document.docx" -t "CONFIDENTIAL" -o "C:\data\document_watermarked.docx"
+```
 
-Jika input `laporan.pdf` dan halaman `3`, maka output:
+Reorder:
 
-`laporan_halaman_3.pdf`
+```powershell
+multus reorder -i "C:\data\example.pdf" -p "10,1-9" -o "C:\data\example_reordered.pdf"
+```
 
-Jika input `laporan.pdf` dan range `1-3,8`, maka output:
+If you pass `-i/-p/-o` directly without a subcommand, Multus automatically runs `split` mode (same behavior as before).
 
-`laporan_halaman_1-3.pdf` dan `laporan_halaman_8.pdf`
+## Page Format
+
+Use this format:
+
+`1-5,8,10-12`
+
+## Unit Tests
+
+```powershell
+cargo test
+```
+
+## Output Naming Example
+
+If input is `report.pdf` and page is `3`:
+
+`report_page_3.pdf`
+
+If input is `report.pdf` and range is `1-3,8`:
+
+`report_page_1-3.pdf` and `report_page_8.pdf`
