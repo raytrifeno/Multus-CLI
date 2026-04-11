@@ -27,14 +27,41 @@ iwr https://raw.githubusercontent.com/raytrifeno/scraks/main/scripts/install.ps1
 ### macOS / Linux
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/raytrifeno/scraks/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/raytrifeno/scraks/main/scripts/install.sh | bash
 ```
 
 Installer behavior:
 
-- Checks whether Rust/Cargo already exists.
-- Installs Rust only when missing.
+- Requires Rust/Cargo to already be installed.
+- Uses a **Parallel Task Runner UI**:
+  - up to 10 packages visible
+  - up to 3 active tasks in parallel
+  - finished tasks disappear and are replaced by queued tasks
 - Installs the CLI command as: `multus`.
+
+Rust prerequisite (manual install):
+
+`https://www.rust-lang.org/tools/install`
+
+## Uninstall
+
+### Windows (PowerShell)
+
+```powershell
+iwr https://raw.githubusercontent.com/raytrifeno/scraks/main/scripts/uninstall.ps1 -UseBasicParsing | iex
+```
+
+### macOS / Linux
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/raytrifeno/scraks/main/scripts/uninstall.sh | bash
+```
+
+Uninstall behavior:
+
+- Removes `multus` binary via `cargo uninstall multus` (if cargo is available).
+- Prompts whether to remove downloaded Cargo package cache.
+- Prompts whether to also remove Rust installation (`~/.rustup` and `~/.cargo`).
 
 ## Build from source
 
