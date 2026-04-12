@@ -1,9 +1,22 @@
-use clap::{Args, CommandFactory, Parser, Subcommand};
+mod cli;
+mod commands;
+mod core;
+mod types;
+mod update;
+
+use clap::{CommandFactory, Parser};
+use cli::{menu_items, normalize_argv, Cli, Commands};
+use commands::{
+    handle_compress, handle_encrypt, handle_images_to_pdf, handle_merge, handle_reorder,
+    handle_split, handle_update, handle_watermark,
+};
+use core::page::{build_reordered_sequence, parse_page_order};
 use crossterm::cursor::{Hide, MoveTo, Show};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use crossterm::style::{Attribute, Color, Print, ResetColor, SetAttribute, SetForegroundColor};
 use crossterm::terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{execute, queue};
+use directories::BaseDirs;
 use image::codecs::jpeg::JpegEncoder;
 use image::imageops::FilterType;
 use image::{DynamicImage, GenericImageView, GrayImage, RgbImage};
@@ -13,10 +26,9 @@ use lopdf::{
     dictionary, Dictionary, Document, EncryptionState, EncryptionVersion, Object, ObjectId,
     Permissions, SaveOptions, Stream,
 };
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::env;
 use std::ffi::OsStr;
-use std::fmt;
 use std::fs;
 use std::io::{self, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
@@ -24,7 +36,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use zip::write::FileOptions;
+use types::{PdfToolError, Result};
+use update::{check_version_state, VersionState, UPDATE_REPO_REF, UPDATE_REPO_URL};
+use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
 const SUPPORTED_IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "bmp", "gif", "tif", "tiff"];
@@ -45,15 +59,6 @@ const MULTUS_ASCII_LOGO: &[&str] = &[
 
 static INTERACTIVE_MODE: AtomicBool = AtomicBool::new(false);
 
-#[derive(Debug, Clone)]
-struct ParsedSelection {
-    pages: Vec<u32>,
-    groups: Vec<Vec<u32>>,
-}
-
-#[derive(Debug, Clone)]
-struct PdfToolError(String);
-
 #[derive(Debug, Clone, Copy)]
 struct CompressionStats {
     original_size: u64,
@@ -70,292 +75,6 @@ struct CompressionProfile {
     min_pixels: u32,
 }
 
-impl PdfToolError {
-    fn new(message: impl Into<String>) -> Self {
-        Self(message.into())
-    }
-}
-
-impl fmt::Display for PdfToolError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl std::error::Error for PdfToolError {}
-
-type Result<T> = std::result::Result<T, PdfToolError>;
-
-#[derive(Parser, Debug)]
-#[command(
-    name = "multus",
-    version,
-    about = "Multus: Split, Compress, Merge, Encrypt, Images to PDF, Watermark, Reorder."
-)]
-struct Cli {
-    #[command(subcommand)]
-    command: Option<Commands>,
-}
-
-#[derive(Subcommand, Debug)]
-enum Commands {
-    Split(SplitArgs),
-    Compress(CompressArgs),
-    Merge(MergeArgs),
-    Encrypt(EncryptArgs),
-    #[command(name = "images-to-pdf", alias = "img2pdf")]
-    ImagesToPdf(ImagesToPdfArgs),
-    Watermark(WatermarkArgs),
-    #[command(alias = "eorder")]
-    Reorder(ReorderArgs),
-}
-
-#[derive(Args, Debug, Default, Clone)]
-struct SplitArgs {
-    #[arg(short, long, help = "Path to input PDF.")]
-    input: Option<String>,
-    #[arg(short, long, help = r#"Page selection, e.g. "1-5,8,10-12"."#)]
-    pages: Option<String>,
-    #[arg(short, long, help = "Output directory.")]
-    output: Option<String>,
-}
-
-#[derive(Args, Debug, Default, Clone)]
-struct CompressArgs {
-    #[arg(short, long, help = "Path to input PDF.")]
-    input: Option<String>,
-    #[arg(short, long, help = "Output filename or directory.")]
-    output: Option<String>,
-    #[arg(
-        short = 'l',
-        long,
-        default_value_t = 2,
-        value_parser = clap::value_parser!(u8).range(1..=3),
-        help = "Compression level: 1 (light), 2 (balanced), 3 (aggressive)."
-    )]
-    level: u8,
-}
-
-#[derive(Args, Debug, Default, Clone)]
-struct MergeArgs {
-    #[arg(short = 'i', long = "inputs", num_args = 1.., help = "Paths to input PDFs.")]
-    inputs: Vec<String>,
-    #[arg(short, long, help = "Output filename.")]
-    output: Option<String>,
-}
-
-#[derive(Args, Debug, Default, Clone)]
-struct EncryptArgs {
-    #[arg(short, long, help = "Path to input PDF.")]
-    input: Option<String>,
-    #[arg(short, long, help = "User password.")]
-    password: Option<String>,
-    #[arg(
-        long = "owner-password",
-        help = "Owner password (default: same as user password)."
-    )]
-    owner_password: Option<String>,
-    #[arg(short, long, help = "Output filename or directory.")]
-    output: Option<String>,
-}
-
-#[derive(Args, Debug, Default, Clone)]
-struct ImagesToPdfArgs {
-    #[arg(
-        short = 'i',
-        long = "inputs",
-        num_args = 1..,
-        help = "Paths to input image files."
-    )]
-    inputs: Vec<String>,
-    #[arg(short, long, help = "Output PDF filename or directory.")]
-    output: Option<String>,
-}
-
-#[derive(Args, Debug, Default, Clone)]
-struct WatermarkArgs {
-    #[arg(short, long, help = "Path to input .pdf or .docx.")]
-    input: Option<String>,
-    #[arg(short, long, help = "Watermark text (example: CONFIDENTIAL).")]
-    text: Option<String>,
-    #[arg(short, long, help = "Output filename or directory.")]
-    output: Option<String>,
-}
-
-#[derive(Args, Debug, Default, Clone)]
-struct ReorderArgs {
-    #[arg(short, long, help = "Path to input PDF.")]
-    input: Option<String>,
-    #[arg(
-        short,
-        long,
-        help = r#"New page order, e.g. "10,1-9" (missing pages will be appended)."#
-    )]
-    pages: Option<String>,
-    #[arg(short, long, help = "Output filename or directory.")]
-    output: Option<String>,
-}
-
-fn parse_page_selection(selection: &str) -> Result<ParsedSelection> {
-    let raw = selection.trim();
-    if raw.is_empty() {
-        return Err(PdfToolError::new("Page selection is empty."));
-    }
-
-    let parts: Vec<&str> = raw
-        .split(',')
-        .map(str::trim)
-        .filter(|p| !p.is_empty())
-        .collect();
-    if parts.is_empty() {
-        return Err(PdfToolError::new("Page selection is invalid."));
-    }
-
-    let mut pages = BTreeSet::new();
-    let mut groups = Vec::new();
-
-    for part in parts {
-        if part.contains('-') {
-            let bounds: Vec<&str> = part.split('-').map(str::trim).collect();
-            if bounds.len() != 2 || bounds[0].is_empty() || bounds[1].is_empty() {
-                return Err(PdfToolError::new(format!("Invalid range: '{part}'")));
-            }
-
-            let start = bounds[0]
-                .parse::<u32>()
-                .map_err(|_| PdfToolError::new(format!("Invalid range numbers: '{part}'")))?;
-            let end = bounds[1]
-                .parse::<u32>()
-                .map_err(|_| PdfToolError::new(format!("Invalid range numbers: '{part}'")))?;
-
-            if start < 1 || end < 1 {
-                return Err(PdfToolError::new(format!("Range must be >= 1: '{part}'")));
-            }
-            if start > end {
-                return Err(PdfToolError::new(format!("Range start > end: '{part}'")));
-            }
-
-            let mut group = Vec::new();
-            for page in start..=end {
-                pages.insert(page);
-                group.push(page);
-            }
-            groups.push(group);
-        } else {
-            let page = part
-                .parse::<u32>()
-                .map_err(|_| PdfToolError::new(format!("Invalid page number: '{part}'")))?;
-            if page < 1 {
-                return Err(PdfToolError::new(format!("Page must be >= 1: '{part}'")));
-            }
-            pages.insert(page);
-            groups.push(vec![page]);
-        }
-    }
-
-    Ok(ParsedSelection {
-        pages: pages.into_iter().collect(),
-        groups,
-    })
-}
-
-fn parse_page_order(selection: &str) -> Result<Vec<u32>> {
-    let raw = selection.trim();
-    if raw.is_empty() {
-        return Err(PdfToolError::new("Page order is empty."));
-    }
-
-    let parts: Vec<&str> = raw
-        .split(',')
-        .map(str::trim)
-        .filter(|p| !p.is_empty())
-        .collect();
-    if parts.is_empty() {
-        return Err(PdfToolError::new("Page order is invalid."));
-    }
-
-    let mut out = Vec::new();
-    for part in parts {
-        if part.contains('-') {
-            let bounds: Vec<&str> = part.split('-').map(str::trim).collect();
-            if bounds.len() != 2 || bounds[0].is_empty() || bounds[1].is_empty() {
-                return Err(PdfToolError::new(format!("Invalid range: '{part}'")));
-            }
-
-            let start = bounds[0]
-                .parse::<u32>()
-                .map_err(|_| PdfToolError::new(format!("Invalid range numbers: '{part}'")))?;
-            let end = bounds[1]
-                .parse::<u32>()
-                .map_err(|_| PdfToolError::new(format!("Invalid range numbers: '{part}'")))?;
-            if start < 1 || end < 1 {
-                return Err(PdfToolError::new(format!("Range must be >= 1: '{part}'")));
-            }
-            if start > end {
-                return Err(PdfToolError::new(format!("Range start > end: '{part}'")));
-            }
-            out.extend(start..=end);
-        } else {
-            let page = part
-                .parse::<u32>()
-                .map_err(|_| PdfToolError::new(format!("Invalid page number: '{part}'")))?;
-            if page < 1 {
-                return Err(PdfToolError::new(format!("Page must be >= 1: '{part}'")));
-            }
-            out.push(page);
-        }
-    }
-
-    Ok(out)
-}
-
-fn validate_pages(pages: &[u32], total_pages: usize) -> Result<Vec<u32>> {
-    if total_pages < 1 {
-        return Err(PdfToolError::new("PDF has no pages."));
-    }
-
-    let max_page = total_pages as u32;
-    let out_of_range: Vec<u32> = pages
-        .iter()
-        .copied()
-        .filter(|p| *p < 1 || *p > max_page)
-        .collect();
-    if !out_of_range.is_empty() {
-        let joined = out_of_range
-            .iter()
-            .map(u32::to_string)
-            .collect::<Vec<_>>()
-            .join(", ");
-        return Err(PdfToolError::new(format!(
-            "Pages out of range (1-{total_pages}): {joined}"
-        )));
-    }
-    Ok(pages.to_vec())
-}
-
-fn build_reordered_sequence(requested: &[u32], total_pages: usize) -> Result<Vec<u32>> {
-    validate_pages(requested, total_pages)?;
-
-    let mut seen = HashSet::new();
-    let mut out = Vec::new();
-    for &page in requested {
-        if !seen.insert(page) {
-            return Err(PdfToolError::new(format!(
-                "Duplicate page in order: '{page}'"
-            )));
-        }
-        out.push(page);
-    }
-
-    for page in 1..=(total_pages as u32) {
-        if seen.insert(page) {
-            out.push(page);
-        }
-    }
-
-    Ok(out)
-}
-
 fn strip_wrapping_quotes(value: &str) -> String {
     let trimmed = value.trim();
     let bytes = trimmed.as_bytes();
@@ -369,21 +88,25 @@ fn strip_wrapping_quotes(value: &str) -> String {
     trimmed.to_string()
 }
 
+fn user_home_dir() -> Option<PathBuf> {
+    BaseDirs::new().map(|dirs| dirs.home_dir().to_path_buf())
+}
+
 fn expand_user(path_text: &str) -> PathBuf {
     if path_text == "~" {
-        if let Some(home) = dirs::home_dir() {
+        if let Some(home) = user_home_dir() {
             return home;
         }
     }
 
     if let Some(rest) = path_text.strip_prefix("~/") {
-        if let Some(home) = dirs::home_dir() {
+        if let Some(home) = user_home_dir() {
             return home.join(rest);
         }
     }
 
     if let Some(rest) = path_text.strip_prefix("~\\") {
-        if let Some(home) = dirs::home_dir() {
+        if let Some(home) = user_home_dir() {
             return home.join(rest);
         }
     }
@@ -461,7 +184,7 @@ fn has_supported_image_extension(path: &Path) -> bool {
 fn open_pdf(input_path: &Path) -> Result<(Vec<u8>, usize)> {
     if !has_pdf_extension(input_path) {
         return Err(PdfToolError::new(format!(
-            "Input is not a PDF file: '{}'",
+            "Input format is not supported for this command: '{}'",
             input_path.display()
         )));
     }
@@ -483,11 +206,11 @@ fn open_pdf(input_path: &Path) -> Result<(Vec<u8>, usize)> {
     })?;
 
     let document = Document::load_mem(&bytes).map_err(|_| {
-        PdfToolError::new(format!("Failed to read PDF: '{}'", input_path.display()))
+        PdfToolError::new(format!("Failed to read document: '{}'", input_path.display()))
     })?;
     let total_pages = document.get_pages().len();
     if total_pages < 1 {
-        return Err(PdfToolError::new("PDF has no pages."));
+        return Err(PdfToolError::new("Input has no pages."));
     }
     Ok((bytes, total_pages))
 }
@@ -561,7 +284,7 @@ fn split_pdf(
         }
 
         let mut doc = Document::load_mem(input_pdf_bytes).map_err(|_| {
-            PdfToolError::new(format!("Failed to read PDF: '{}'", input_path.display()))
+            PdfToolError::new(format!("Failed to read document: '{}'", input_path.display()))
         })?;
         let selected: HashSet<u32> = group.iter().copied().collect();
 
@@ -587,7 +310,7 @@ fn split_pdf(
         let output_path = output_dir.join(format!("{stem}_page_{label}.pdf"));
         doc.save(&output_path).map_err(|e| {
             PdfToolError::new(format!(
-                "Failed to save split PDF '{}': {e}",
+                "Failed to save split output '{}': {e}",
                 output_path.display()
             ))
         })?;
@@ -802,14 +525,14 @@ fn optimize_images_for_compression(doc: &mut Document, level: u8) -> usize {
 fn compress_pdf(input_path: &Path, output_path: &Path, level: u8) -> Result<CompressionStats> {
     let original_bytes = fs::read(input_path).map_err(|e| {
         PdfToolError::new(format!(
-            "Failed to read input PDF '{}': {e}",
+            "Failed to read input file '{}': {e}",
             input_path.display()
         ))
     })?;
     let original_size = original_bytes.len() as u64;
 
     let mut doc = Document::load_mem(&original_bytes)
-        .map_err(|e| PdfToolError::new(format!("Failed to compress PDF: {e}")))?;
+        .map_err(|e| PdfToolError::new(format!("Failed to compress file: {e}")))?;
     let images_optimized = optimize_images_for_compression(&mut doc, level);
     doc.compress();
 
@@ -827,13 +550,13 @@ fn compress_pdf(input_path: &Path, output_path: &Path, level: u8) -> Result<Comp
         .build();
     let mut compressed_bytes = Vec::new();
     doc.save_with_options(&mut compressed_bytes, options)
-        .map_err(|e| PdfToolError::new(format!("Failed to compress PDF: {e}")))?;
+        .map_err(|e| PdfToolError::new(format!("Failed to compress file: {e}")))?;
 
     let compressed_size = compressed_bytes.len() as u64;
     if compressed_size >= original_size {
         fs::write(output_path, &original_bytes).map_err(|e| {
             PdfToolError::new(format!(
-                "Failed to save output PDF '{}': {e}",
+                "Failed to save output file '{}': {e}",
                 output_path.display()
             ))
         })?;
@@ -848,7 +571,7 @@ fn compress_pdf(input_path: &Path, output_path: &Path, level: u8) -> Result<Comp
 
     fs::write(output_path, &compressed_bytes).map_err(|e| {
         PdfToolError::new(format!(
-            "Failed to save compressed PDF '{}': {e}",
+            "Failed to save compressed output '{}': {e}",
             output_path.display()
         ))
     })?;
@@ -863,7 +586,7 @@ fn compress_pdf(input_path: &Path, output_path: &Path, level: u8) -> Result<Comp
 
 fn merge_documents(mut docs: Vec<Document>) -> Result<Document> {
     if docs.is_empty() {
-        return Err(PdfToolError::new("No input PDFs to merge."));
+        return Err(PdfToolError::new("No input files to merge."));
     }
 
     let mut max_id = 1;
@@ -978,7 +701,7 @@ fn merge_pdfs(input_paths: &[PathBuf], output_path: &Path) -> Result<()> {
     let mut merged = merge_documents(docs)?;
     merged
         .save(output_path)
-        .map_err(|e| PdfToolError::new(format!("Failed to save merged PDF: {e}")))?;
+        .map_err(|e| PdfToolError::new(format!("Failed to save merged output: {e}")))?;
     Ok(())
 }
 
@@ -989,10 +712,10 @@ fn encrypt_pdf(
     owner_password: Option<&str>,
 ) -> Result<()> {
     let mut doc = Document::load(input_path)
-        .map_err(|e| PdfToolError::new(format!("Failed to read PDF: {e}")))?;
+        .map_err(|e| PdfToolError::new(format!("Failed to read document: {e}")))?;
     if doc.is_encrypted() {
         return Err(PdfToolError::new(
-            "Input PDF is already encrypted. Decrypt it first before re-encrypting.",
+            "Input file is already encrypted. Decrypt it first before re-encrypting.",
         ));
     }
 
@@ -1001,7 +724,7 @@ fn encrypt_pdf(
             .duration_since(UNIX_EPOCH)
             .unwrap_or_else(|_| Duration::from_secs(0))
             .as_nanos();
-        let doc_id = format!("pdf-tools-{}-{nonce}", std::process::id());
+        let doc_id = format!("multus-{}-{nonce}", std::process::id());
         doc.trailer.set(
             "ID",
             Object::Array(vec![
@@ -1032,9 +755,9 @@ fn encrypt_pdf(
     let state = EncryptionState::try_from(version)
         .map_err(|e| PdfToolError::new(format!("Failed to prepare encryption: {e}")))?;
     doc.encrypt(&state)
-        .map_err(|e| PdfToolError::new(format!("Failed to encrypt PDF: {e}")))?;
+        .map_err(|e| PdfToolError::new(format!("Failed to encrypt file: {e}")))?;
     doc.save(output_path)
-        .map_err(|e| PdfToolError::new(format!("Failed to save encrypted PDF: {e}")))?;
+        .map_err(|e| PdfToolError::new(format!("Failed to save encrypted output: {e}")))?;
     Ok(())
 }
 
@@ -1117,7 +840,7 @@ fn images_to_pdf(image_paths: &[PathBuf], output_path: &Path) -> Result<()> {
     doc.renumber_objects();
     doc.compress();
     doc.save(output_path)
-        .map_err(|e| PdfToolError::new(format!("Failed to save PDF: {e}")))?;
+        .map_err(|e| PdfToolError::new(format!("Failed to save output file: {e}")))?;
     Ok(())
 }
 
@@ -1221,7 +944,7 @@ fn page_dimensions(doc: &Document, page_id: ObjectId) -> (f32, f32) {
 
 fn apply_pdf_watermark(input_path: &Path, output_path: &Path, watermark_text: &str) -> Result<()> {
     let mut doc = Document::load(input_path)
-        .map_err(|e| PdfToolError::new(format!("Failed to read PDF: {e}")))?;
+        .map_err(|e| PdfToolError::new(format!("Failed to read document: {e}")))?;
     let font_id = doc.add_object(dictionary! {
         "Type" => "Font",
         "Subtype" => "Type1",
@@ -1273,7 +996,7 @@ fn apply_pdf_watermark(input_path: &Path, output_path: &Path, watermark_text: &s
 
     doc.compress();
     doc.save(output_path)
-        .map_err(|e| PdfToolError::new(format!("Failed to save watermarked PDF: {e}")))?;
+        .map_err(|e| PdfToolError::new(format!("Failed to save watermarked output: {e}")))?;
     Ok(())
 }
 
@@ -1309,7 +1032,8 @@ fn write_zip_entries(path: &Path, entries: &BTreeMap<String, Vec<u8>>) -> Result
         ))
     })?;
     let mut writer = ZipWriter::new(file);
-    let options = FileOptions::default().compression_method(CompressionMethod::Deflated);
+    let options =
+        SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
 
     for (name, data) in entries {
         writer
@@ -1565,7 +1289,7 @@ fn apply_watermark(input_path: &Path, output_path: &Path, watermark_text: &str) 
         apply_docx_watermark(input_path, output_path, watermark_text)
     } else {
         Err(PdfToolError::new(
-            "Watermark currently supports .pdf and .docx files only.",
+            "Watermark currently supports only file types handled by this command.",
         ))
     }
 }
@@ -1578,7 +1302,7 @@ fn reorder_pdf(input_path: &Path, output_path: &Path, page_order_expr: &str) -> 
     let mut docs = Vec::new();
     for page in final_order {
         let mut page_doc = Document::load_mem(&pdf_bytes).map_err(|_| {
-            PdfToolError::new(format!("Failed to read PDF: '{}'", input_path.display()))
+            PdfToolError::new(format!("Failed to read document: '{}'", input_path.display()))
         })?;
 
         let existing_pages = page_doc.get_pages();
@@ -1600,7 +1324,7 @@ fn reorder_pdf(input_path: &Path, output_path: &Path, page_order_expr: &str) -> 
     merged.compress();
     merged
         .save(output_path)
-        .map_err(|e| PdfToolError::new(format!("Failed to save reordered PDF: {e}")))?;
+        .map_err(|e| PdfToolError::new(format!("Failed to save reordered output: {e}")))?;
     Ok(())
 }
 
@@ -1668,11 +1392,21 @@ fn print_step(title: &str) {
     println!("\n[{title}]");
 }
 
+fn interactive_version_line() -> String {
+    match check_version_state(UPDATE_REPO_URL, UPDATE_REPO_REF) {
+        VersionState::UpdateAvailable { current, latest } => {
+            format!("Update tersedia: v{current} -> v{latest} (pilih menu Update)")
+        }
+        VersionState::UpToDate { current } => format!("Version current: v{current}"),
+        VersionState::Unknown { current } => format!("Version current: v{current}"),
+    }
+}
+
 fn is_back_to_menu_error(err: &PdfToolError) -> bool {
     err.0 == CONTROL_BACK_TO_MENU
 }
 
-fn render_arrow_menu(menu_items: &[(&str, &str)], selected_index: usize) -> Result<()> {
+fn render_arrow_menu(menu_items: &[(&str, &str)], selected_index: usize, version_line: &str) -> Result<()> {
     let mut stdout = io::stdout();
     execute!(stdout, MoveTo(0, 0), Clear(ClearType::All))
         .map_err(|e| PdfToolError::new(format!("Failed to draw menu: {e}")))?;
@@ -1681,9 +1415,7 @@ fn render_arrow_menu(menu_items: &[(&str, &str)], selected_index: usize) -> Resu
         .map_err(|e| PdfToolError::new(format!("Failed to draw menu: {e}")))?;
     queue!(
         stdout,
-        Print(
-            "Use ↑/↓ to move, Enter to select, Esc for default Split, Q twice to exit.\nType QQ in any prompt to return here.\n",
-        )
+        Print("Use ↑/↓ to move, Enter to select, Esc for default Split.\nType QQ in any prompt to return here.\n")
     )
     .map_err(|e| PdfToolError::new(format!("Failed to draw menu: {e}")))?;
 
@@ -1709,7 +1441,12 @@ fn render_arrow_menu(menu_items: &[(&str, &str)], selected_index: usize) -> Resu
         }
     }
 
-    queue!(stdout, Print("\nReady.\n"))
+    queue!(
+        stdout,
+        Print("\n"),
+        Print(format!("{version_line}\n")),
+        Print("Quit: tekan tombol Q dua kali.\n")
+    )
         .map_err(|e| PdfToolError::new(format!("Failed to draw menu: {e}")))?;
     stdout
         .flush()
@@ -1717,7 +1454,7 @@ fn render_arrow_menu(menu_items: &[(&str, &str)], selected_index: usize) -> Resu
     Ok(())
 }
 
-fn choose_command_with_arrows(menu_items: &[(&str, &str)]) -> Result<Option<String>> {
+fn choose_command_with_arrows(menu_items: &[(&str, &str)], version_line: &str) -> Result<Option<String>> {
     if menu_items.is_empty() {
         return Err(PdfToolError::new("Menu options are empty."));
     }
@@ -1738,7 +1475,7 @@ fn choose_command_with_arrows(menu_items: &[(&str, &str)]) -> Result<Option<Stri
     let mut q_press_count = 0u8;
     let menu_result = (|| -> Result<Option<String>> {
         loop {
-            render_arrow_menu(menu_items, selected)?;
+            render_arrow_menu(menu_items, selected, version_line)?;
 
             let evt = event::read()
                 .map_err(|e| PdfToolError::new(format!("Failed to read keyboard input: {e}")))?;
@@ -1814,508 +1551,6 @@ where
     result
 }
 
-fn handle_split(args: SplitArgs) -> Result<i32> {
-    let input_value = if let Some(input) = args.input {
-        input
-    } else {
-        print_step("INPUT PDF");
-        prompt_non_empty("Enter the PDF file path: ")?
-    };
-
-    let input_path = resolve_input_path(&input_value)?;
-    let (pdf_bytes, total_pages) = run_with_spinner("Verifying PDF...", || open_pdf(&input_path))?;
-
-    let pages_value = if let Some(pages) = args.pages {
-        pages
-    } else {
-        print_step("SELECT PAGES");
-        prompt_non_empty(r#"Enter page range (example "1-5,8,10-12"): "#)?
-    };
-
-    let selection = parse_page_selection(&pages_value)?;
-    validate_pages(&selection.pages, total_pages)?;
-
-    let output_value = if let Some(output) = args.output {
-        output
-    } else {
-        print_step("OUTPUT");
-        let value = prompt_optional("Save to which directory? (empty = current directory): ")?;
-        if value.is_empty() {
-            env::current_dir()
-                .map_err(|e| PdfToolError::new(format!("Failed to read current directory: {e}")))?
-                .to_string_lossy()
-                .to_string()
-        } else {
-            value
-        }
-    };
-
-    let output_dir = ensure_output_dir(Some(&output_value))?;
-    let count = split_pdf(&input_path, &pdf_bytes, &selection.groups, &output_dir)?;
-    println!("Saved {count} file(s) to: {}", output_dir.display());
-    Ok(0)
-}
-
-fn handle_compress(args: CompressArgs) -> Result<i32> {
-    let input_value = if let Some(input) = args.input {
-        input
-    } else {
-        print_step("INPUT PDF");
-        prompt_non_empty("Enter the PDF file path: ")?
-    };
-
-    let input_path = resolve_input_path(&input_value)?;
-    if !input_path.exists() {
-        return Err(PdfToolError::new(format!(
-            "File not found: '{}'",
-            input_path.display()
-        )));
-    }
-    if !has_pdf_extension(&input_path) {
-        return Err(PdfToolError::new(format!(
-            "Input is not a PDF file: '{}'",
-            input_path.display()
-        )));
-    }
-
-    let output_value = if let Some(output) = args.output {
-        output
-    } else {
-        print_step("OUTPUT");
-        prompt_optional(&format!(
-            "Save as? (empty = {}_compressed.pdf): ",
-            input_path
-                .file_stem()
-                .and_then(OsStr::to_str)
-                .unwrap_or("output")
-        ))?
-    };
-
-    let default_name = format!(
-        "{}_compressed.pdf",
-        input_path
-            .file_stem()
-            .and_then(OsStr::to_str)
-            .unwrap_or("output")
-    );
-    let output_path = build_output_file_path(&input_path, Some(&output_value), &default_name)?;
-
-    let stats = run_with_spinner("Compressing PDF...", || {
-        compress_pdf(&input_path, &output_path, args.level)
-    })?;
-
-    let original_size = stats.original_size;
-    let compressed_size = stats.output_size;
-    let reduction = if original_size == 0 {
-        0.0
-    } else {
-        (1.0 - (compressed_size as f64 / original_size as f64)) * 100.0
-    };
-
-    println!("Compression complete!");
-    if stats.fallback_to_original {
-        println!("This file is already optimized: compressed output was larger, so the original size was kept.");
-    }
-    println!("Level:           {}", stats.level);
-    println!("Images optimized: {}", stats.images_optimized);
-    println!(
-        "Original size:   {:.2} MB",
-        original_size as f64 / 1024.0 / 1024.0
-    );
-    println!(
-        "Compressed size: {:.2} MB",
-        compressed_size as f64 / 1024.0 / 1024.0
-    );
-    println!("Reduction:       {reduction:.2}%");
-    println!("Saved to: {}", output_path.display());
-    Ok(0)
-}
-
-fn handle_merge(args: MergeArgs) -> Result<i32> {
-    let input_values = if !args.inputs.is_empty() {
-        args.inputs
-    } else {
-        print_step("INPUT PDFS");
-        let raw = prompt_non_empty("Enter PDF file paths (separate with spaces or commas): ")?;
-        if raw.contains(',') {
-            raw.split(',')
-                .map(str::trim)
-                .filter(|x| !x.is_empty())
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-        } else {
-            raw.split_whitespace()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-        }
-    };
-
-    let input_paths: Vec<PathBuf> = input_values
-        .iter()
-        .map(|value| resolve_input_path(value))
-        .collect::<Result<Vec<_>>>()?;
-    for path in &input_paths {
-        if !path.exists() {
-            return Err(PdfToolError::new(format!(
-                "File not found: '{}'",
-                path.display()
-            )));
-        }
-        if !has_pdf_extension(path) {
-            return Err(PdfToolError::new(format!(
-                "Input is not a PDF file: '{}'",
-                path.display()
-            )));
-        }
-    }
-
-    let output_value = if let Some(output) = args.output {
-        output
-    } else {
-        print_step("OUTPUT");
-        prompt_non_empty("Save as? (example: merged.pdf): ")?
-    };
-
-    let default_name = "merged.pdf".to_string();
-    let output_path = build_output_file_path(&input_paths[0], Some(&output_value), &default_name)?;
-
-    run_with_spinner("Merging PDFs...", || merge_pdfs(&input_paths, &output_path))?;
-    println!("Merge complete!");
-    println!("Saved to: {}", output_path.display());
-    Ok(0)
-}
-
-fn handle_encrypt(args: EncryptArgs) -> Result<i32> {
-    let input_value = if let Some(input) = args.input {
-        input
-    } else {
-        print_step("INPUT PDF");
-        prompt_non_empty("Enter the PDF file path: ")?
-    };
-    let input_path = resolve_input_path(&input_value)?;
-    if !input_path.exists() {
-        return Err(PdfToolError::new(format!(
-            "File not found: '{}'",
-            input_path.display()
-        )));
-    }
-    if !has_pdf_extension(&input_path) {
-        return Err(PdfToolError::new(format!(
-            "Input is not a PDF file: '{}'",
-            input_path.display()
-        )));
-    }
-
-    let prompted_password = args.password.is_none();
-    let password = if let Some(pass) = args.password.as_ref() {
-        pass.trim().to_string()
-    } else {
-        print_step("PASSWORD");
-        prompt_non_empty("Enter PDF password: ")?
-    };
-    if password.is_empty() {
-        return Err(PdfToolError::new("Password cannot be empty."));
-    }
-
-    let owner_password = if let Some(owner) = args.owner_password {
-        let cleaned = owner.trim().to_string();
-        if cleaned.is_empty() {
-            None
-        } else {
-            Some(cleaned)
-        }
-    } else if prompted_password {
-        print_step("OWNER PASSWORD");
-        let value = prompt_optional("Enter owner password (empty = same as user password): ")?;
-        if value.is_empty() {
-            None
-        } else {
-            Some(value)
-        }
-    } else {
-        None
-    };
-
-    let output_value = if let Some(output) = args.output {
-        output
-    } else {
-        print_step("OUTPUT");
-        prompt_optional(&format!(
-            "Save as? (empty = {}_encrypted.pdf): ",
-            input_path
-                .file_stem()
-                .and_then(OsStr::to_str)
-                .unwrap_or("output")
-        ))?
-    };
-
-    let default_name = format!(
-        "{}_encrypted.pdf",
-        input_path
-            .file_stem()
-            .and_then(OsStr::to_str)
-            .unwrap_or("output")
-    );
-    let output_path = build_output_file_path(&input_path, Some(&output_value), &default_name)?;
-
-    run_with_spinner("Encrypting PDF...", || {
-        encrypt_pdf(
-            &input_path,
-            &output_path,
-            &password,
-            owner_password.as_deref(),
-        )
-    })?;
-    println!("Encryption complete!");
-    println!("Saved to: {}", output_path.display());
-    Ok(0)
-}
-
-fn handle_images_to_pdf(args: ImagesToPdfArgs) -> Result<i32> {
-    let input_values = if !args.inputs.is_empty() {
-        args.inputs
-    } else {
-        print_step("INPUT IMAGES");
-        let raw = prompt_non_empty("Enter image file paths (separate with spaces or commas): ")?;
-        if raw.contains(',') {
-            raw.split(',')
-                .map(str::trim)
-                .filter(|x| !x.is_empty())
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-        } else {
-            raw.split_whitespace()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-        }
-    };
-
-    let input_paths: Vec<PathBuf> = input_values
-        .iter()
-        .map(|value| resolve_input_path(value))
-        .collect::<Result<Vec<_>>>()?;
-    if input_paths.is_empty() {
-        return Err(PdfToolError::new("No image files were provided."));
-    }
-    for path in &input_paths {
-        if !path.exists() {
-            return Err(PdfToolError::new(format!(
-                "File not found: '{}'",
-                path.display()
-            )));
-        }
-        if !has_supported_image_extension(path) {
-            return Err(PdfToolError::new(format!(
-                "Unsupported image format: '{}'. Supported: png, jpg, jpeg, bmp, gif, tif, tiff",
-                path.display()
-            )));
-        }
-    }
-
-    let output_value = if let Some(output) = args.output {
-        output
-    } else {
-        print_step("OUTPUT");
-        prompt_optional(&format!(
-            "Save as? (empty = {}_images.pdf): ",
-            input_paths[0]
-                .file_stem()
-                .and_then(OsStr::to_str)
-                .unwrap_or("output")
-        ))?
-    };
-
-    let default_name = format!(
-        "{}_images.pdf",
-        input_paths[0]
-            .file_stem()
-            .and_then(OsStr::to_str)
-            .unwrap_or("output")
-    );
-    let output_path = build_output_file_path(&input_paths[0], Some(&output_value), &default_name)?;
-
-    run_with_spinner("Building PDF from images...", || {
-        images_to_pdf(&input_paths, &output_path)
-    })?;
-
-    println!("Conversion complete!");
-    println!("Saved to: {}", output_path.display());
-    Ok(0)
-}
-
-fn handle_watermark(args: WatermarkArgs) -> Result<i32> {
-    let input_value = if let Some(input) = args.input {
-        input
-    } else {
-        print_step("INPUT FILE");
-        prompt_non_empty("Enter a .pdf or .docx file path: ")?
-    };
-    let input_path = resolve_input_path(&input_value)?;
-    if !input_path.exists() {
-        return Err(PdfToolError::new(format!(
-            "File not found: '{}'",
-            input_path.display()
-        )));
-    }
-    if !has_pdf_extension(&input_path) && !has_docx_extension(&input_path) {
-        return Err(PdfToolError::new(
-            "Watermark currently supports .pdf and .docx files only.",
-        ));
-    }
-
-    let watermark_text = if let Some(text) = args.text {
-        let cleaned = text.trim().to_string();
-        if cleaned.is_empty() {
-            "CONFIDENTIAL".to_string()
-        } else {
-            cleaned
-        }
-    } else {
-        print_step("WATERMARK TEXT");
-        let value = prompt_optional("Enter watermark text (empty = CONFIDENTIAL): ")?;
-        if value.is_empty() {
-            "CONFIDENTIAL".to_string()
-        } else {
-            value
-        }
-    };
-
-    let ext = if has_docx_extension(&input_path) {
-        "docx"
-    } else {
-        "pdf"
-    };
-    let output_value = if let Some(output) = args.output {
-        output
-    } else {
-        print_step("OUTPUT");
-        prompt_optional(&format!(
-            "Save as? (empty = {}_watermarked.{ext}): ",
-            input_path
-                .file_stem()
-                .and_then(OsStr::to_str)
-                .unwrap_or("output")
-        ))?
-    };
-
-    let default_name = format!(
-        "{}_watermarked.{ext}",
-        input_path
-            .file_stem()
-            .and_then(OsStr::to_str)
-            .unwrap_or("output")
-    );
-    let output_path = build_output_file_path(&input_path, Some(&output_value), &default_name)?;
-
-    run_with_spinner("Applying watermark...", || {
-        apply_watermark(&input_path, &output_path, &watermark_text)
-    })?;
-
-    println!("Watermark complete!");
-    println!("Saved to: {}", output_path.display());
-    Ok(0)
-}
-
-fn handle_reorder(args: ReorderArgs) -> Result<i32> {
-    let input_value = if let Some(input) = args.input {
-        input
-    } else {
-        print_step("INPUT PDF");
-        prompt_non_empty("Enter the PDF file path: ")?
-    };
-    let input_path = resolve_input_path(&input_value)?;
-    if !input_path.exists() {
-        return Err(PdfToolError::new(format!(
-            "File not found: '{}'",
-            input_path.display()
-        )));
-    }
-    if !has_pdf_extension(&input_path) {
-        return Err(PdfToolError::new(format!(
-            "Input is not a PDF file: '{}'",
-            input_path.display()
-        )));
-    }
-
-    let order_value = if let Some(pages) = args.pages {
-        pages
-    } else {
-        print_step("ORDER");
-        prompt_non_empty(r#"Enter new page order (example "10,1-9"): "#)?
-    };
-
-    let output_value = if let Some(output) = args.output {
-        output
-    } else {
-        print_step("OUTPUT");
-        prompt_optional(&format!(
-            "Save as? (empty = {}_reordered.pdf): ",
-            input_path
-                .file_stem()
-                .and_then(OsStr::to_str)
-                .unwrap_or("output")
-        ))?
-    };
-
-    let default_name = format!(
-        "{}_reordered.pdf",
-        input_path
-            .file_stem()
-            .and_then(OsStr::to_str)
-            .unwrap_or("output")
-    );
-    let output_path = build_output_file_path(&input_path, Some(&output_value), &default_name)?;
-
-    run_with_spinner("Reordering pages...", || {
-        reorder_pdf(&input_path, &output_path, &order_value)
-    })?;
-    println!("Reorder complete!");
-    println!("Saved to: {}", output_path.display());
-    Ok(0)
-}
-
-fn normalize_argv(mut argv: Vec<String>) -> Vec<String> {
-    if argv.is_empty() {
-        return argv;
-    }
-
-    let first = argv[0].as_str();
-    let known = matches!(
-        first,
-        "split"
-            | "compress"
-            | "merge"
-            | "encrypt"
-            | "images-to-pdf"
-            | "img2pdf"
-            | "watermark"
-            | "reorder"
-            | "eorder"
-            | "help"
-            | "-h"
-            | "--help"
-            | "-V"
-            | "--version"
-    );
-    if !known {
-        argv.insert(0, "split".to_string());
-    }
-
-    argv
-}
-
-fn menu_items() -> [(&'static str, &'static str); 7] {
-    [
-        ("Split PDF pages", "split"),
-        ("Compress PDF file size", "compress"),
-        ("Merge multiple PDFs", "merge"),
-        ("Encrypt PDF with password", "encrypt"),
-        ("Convert images to PDF", "images-to-pdf"),
-        ("Add watermark (PDF / DOCX)", "watermark"),
-        ("Reorder PDF pages", "reorder"),
-    ]
-}
-
 fn parse_cli(normalized_args: Vec<String>) -> std::result::Result<Cli, i32> {
     let mut parse_input = vec!["multus".to_string()];
     parse_input.extend(normalized_args);
@@ -2339,6 +1574,7 @@ fn execute_command(cli: Cli) -> Result<i32> {
         Some(Commands::ImagesToPdf(args)) => handle_images_to_pdf(args),
         Some(Commands::Watermark(args)) => handle_watermark(args),
         Some(Commands::Reorder(args)) => handle_reorder(args),
+        Some(Commands::Update(args)) => handle_update(args),
         None => {
             let mut cmd = Cli::command();
             let _ = cmd.print_help();
@@ -2351,9 +1587,10 @@ fn execute_command(cli: Cli) -> Result<i32> {
 fn run_interactive() -> i32 {
     INTERACTIVE_MODE.store(true, Ordering::Relaxed);
     let items = menu_items();
+    let mut version_line = interactive_version_line();
 
     loop {
-        let selected_command = match choose_command_with_arrows(&items) {
+        let selected_command = match choose_command_with_arrows(&items, &version_line) {
             Ok(Some(command)) => command,
             Ok(None) => {
                 INTERACTIVE_MODE.store(false, Ordering::Relaxed);
@@ -2383,6 +1620,8 @@ fn run_interactive() -> i32 {
             Err(err) if is_back_to_menu_error(&err) => {}
             Err(err) => eprintln!("Error: {err}"),
         }
+
+        version_line = interactive_version_line();
     }
 }
 
@@ -2430,78 +1669,4 @@ fn run(argv: Option<Vec<String>>) -> i32 {
 
 fn main() {
     std::process::exit(run(None));
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{build_reordered_sequence, parse_page_order, parse_page_selection, validate_pages};
-
-    #[test]
-    fn parse_single_pages() {
-        let result = parse_page_selection("1,3,5").expect("should parse");
-        assert_eq!(result.pages, vec![1, 3, 5]);
-        assert_eq!(result.groups, vec![vec![1], vec![3], vec![5]]);
-    }
-
-    #[test]
-    fn parse_ranges() {
-        let result = parse_page_selection("1-3,5-6").expect("should parse");
-        assert_eq!(result.pages, vec![1, 2, 3, 5, 6]);
-        assert_eq!(result.groups, vec![vec![1, 2, 3], vec![5, 6]]);
-    }
-
-    #[test]
-    fn parse_mixed_and_duplicates() {
-        let result = parse_page_selection("1-3,2,3,5").expect("should parse");
-        assert_eq!(result.pages, vec![1, 2, 3, 5]);
-        assert_eq!(
-            result.groups,
-            vec![vec![1, 2, 3], vec![2], vec![3], vec![5]]
-        );
-    }
-
-    #[test]
-    fn parse_invalid_range() {
-        assert!(parse_page_selection("3-1").is_err());
-    }
-
-    #[test]
-    fn parse_invalid_number() {
-        assert!(parse_page_selection("a").is_err());
-    }
-
-    #[test]
-    fn validate_pages_out_of_range() {
-        assert!(validate_pages(&[1, 4], 3).is_err());
-    }
-
-    #[test]
-    fn validate_pages_ok() {
-        assert_eq!(
-            validate_pages(&[1, 2], 2).expect("should validate"),
-            vec![1, 2]
-        );
-    }
-
-    #[test]
-    fn parse_page_order_mixed() {
-        let result = parse_page_order("10,1-3,5").expect("should parse order");
-        assert_eq!(result, vec![10, 1, 2, 3, 5]);
-    }
-
-    #[test]
-    fn parse_page_order_invalid() {
-        assert!(parse_page_order("4-1").is_err());
-    }
-
-    #[test]
-    fn reorder_sequence_appends_missing_pages() {
-        let result = build_reordered_sequence(&[10], 10).expect("should build order");
-        assert_eq!(result, vec![10, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
-    }
-
-    #[test]
-    fn reorder_sequence_rejects_duplicates() {
-        assert!(build_reordered_sequence(&[1, 2, 2], 5).is_err());
-    }
 }

@@ -14,15 +14,89 @@ $repoRef = "main"
 $maxDisplay = 10
 $maxActive = 3
 $script:lastFrameLineCount = 0
+$ansiEsc = [char]27
+$ansiReset = "$ansiEsc[0m"
+$ansiGreen = "$ansiEsc[32m"
+$ansiOrange = "$ansiEsc[38;5;208m"
 
 function Write-Step {
     param([string]$Message)
-    Write-Host "[multus-install] $Message" -ForegroundColor Yellow
+    Write-Host $Message -ForegroundColor Yellow
 }
 
 function Test-Command {
     param([string]$Name)
     return $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
+}
+
+function Normalize-PathEntry {
+    param([string]$PathEntry)
+
+    if ([string]::IsNullOrWhiteSpace($PathEntry)) {
+        return ""
+    }
+
+    return $PathEntry.Trim().TrimEnd('\\')
+}
+
+function Path-ContainsEntry {
+    param(
+        [string]$PathValue,
+        [string]$Entry
+    )
+
+    $normalizedEntry = Normalize-PathEntry -PathEntry $Entry
+    if ([string]::IsNullOrWhiteSpace($normalizedEntry)) {
+        return $false
+    }
+    if ([string]::IsNullOrWhiteSpace($PathValue)) {
+        return $false
+    }
+
+    foreach ($candidate in ($PathValue -split ';')) {
+        if ((Normalize-PathEntry -PathEntry $candidate) -ieq $normalizedEntry) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
+function Ensure-CargoBinOnPath {
+    $cargoBin = Join-Path $env:USERPROFILE ".cargo\bin"
+    $result = @{
+        CargoBin         = $cargoBin
+        AddedUserPath    = $false
+        AddedSessionPath = $false
+    }
+
+    if (-not (Test-Path $cargoBin -PathType Container)) {
+        return $result
+    }
+
+    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    if (-not (Path-ContainsEntry -PathValue $userPath -Entry $cargoBin)) {
+        $newUserPath = if ([string]::IsNullOrWhiteSpace($userPath)) {
+            $cargoBin
+        }
+        else {
+            "$userPath;$cargoBin"
+        }
+        [Environment]::SetEnvironmentVariable("Path", $newUserPath, "User")
+        $result.AddedUserPath = $true
+    }
+
+    if (-not (Path-ContainsEntry -PathValue $env:Path -Entry $cargoBin)) {
+        $env:Path = if ([string]::IsNullOrWhiteSpace($env:Path)) {
+            $cargoBin
+        }
+        else {
+            "$env:Path;$cargoBin"
+        }
+        $result.AddedSessionPath = $true
+    }
+
+    return $result
 }
 
 function Resolve-UiMode {
@@ -37,13 +111,52 @@ function Resolve-UiMode {
     return "compact"
 }
 
+function Install-RustToolchain {
+    Write-Step "Rust/Cargo not found. Installing Rust toolchain..."
+
+    $rustupTempDir = Join-Path $env:TEMP ("multus-rustup-" + [Guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Path $rustupTempDir -Force | Out-Null
+    $rustupExe = Join-Path $rustupTempDir "rustup-init.exe"
+
+    try {
+        Invoke-SimulatedStage -Mode $renderMode -Title "Downloading" -Tasks @("rustup-init")
+        Invoke-WebRequest -Uri "https://win.rustup.rs/x86_64" -OutFile $rustupExe -UseBasicParsing
+
+        $rustTasks = @("channel", "cargo", "clippy", "rust-docs", "rust-std", "rustc", "rustfmt")
+        Invoke-ProcessStage `
+            -Mode $renderMode `
+            -Title "Compiling" `
+            -Tasks $rustTasks `
+            -EventRegex 'downloading component|installing component|syncing channel updates|default toolchain set to' `
+            -Executable $rustupExe `
+            -Arguments @("-y", "--profile", "default", "--default-toolchain", "stable")
+    }
+    finally {
+        if (Test-Path $rustupTempDir -PathType Container) {
+            Remove-Item -Path $rustupTempDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    $pathState = Ensure-CargoBinOnPath
+    if ($pathState.AddedUserPath) {
+        Write-Step "Added '$($pathState.CargoBin)' to user PATH."
+    }
+    if ($pathState.AddedSessionPath) {
+        Write-Step "Updated PATH for current session."
+    }
+
+    if (-not (Test-Command "cargo")) {
+        throw "Rust/Cargo installation failed. Install manually from https://www.rust-lang.org/tools/install then rerun installer."
+    }
+}
+
 function Ensure-Prerequisites {
     if (-not (Test-Command "git")) {
         throw "git is required. Install git first, then run this installer again."
     }
 
     if (-not (Test-Command "cargo")) {
-        throw "Rust/Cargo not found. Install Rust first at https://www.rust-lang.org/tools/install, then rerun this installer."
+        Install-RustToolchain
     }
 }
 
@@ -70,7 +183,11 @@ function Get-LockPackages {
 }
 
 function New-StageState {
-    param([string[]]$Tasks)
+    param(
+        [string[]]$Tasks,
+        [string]$UnitLabel = "count",
+        [int]$TotalUnits = 0
+    )
 
     if (-not $Tasks -or $Tasks.Count -eq 0) {
         $Tasks = @("multus")
@@ -87,10 +204,12 @@ function New-StageState {
     }
 
     return @{
-        Total   = $Tasks.Count
-        Done    = 0
-        Pending = $pending
-        Active  = $active
+        Total      = $Tasks.Count
+        Done       = 0
+        Pending    = $pending
+        Active     = $active
+        UnitLabel  = $UnitLabel
+        TotalUnits = $(if ($TotalUnits -gt 0) { $TotalUnits } else { $Tasks.Count })
     }
 }
 
@@ -125,11 +244,111 @@ function New-ProgressBar {
         $Total = 1
     }
 
-    $ratio = [Math]::Min(1.0, [Math]::Max(0.0, $Done / $Total))
-    $filled = [Math]::Floor($ratio * $width)
-    $empty = $width - $filled
+    if ($Done -le 0) {
+        return ("[>" + ("-" * ($width - 1)) + "]")
+    }
 
-    return ("[" + ("#" * $filled) + ("-" * $empty) + "]")
+    if ($Done -ge $Total) {
+        return ("[" + ("=" * $width) + "]")
+    }
+
+    $filled = [Math]::Floor(($Done / [double]$Total) * ($width - 1))
+    if ($filled -lt 2) {
+        $filled = 2
+    }
+    if ($filled -ge $width) {
+        $filled = $width - 1
+    }
+
+    $empty = $width - $filled - 1
+    return ("[" + ("=" * $filled) + ">" + ("-" * $empty) + "]")
+}
+
+function Get-DisplayProgress {
+    param([hashtable]$State)
+
+    if ($State.UnitLabel -eq "MB") {
+        $totalUnits = [Math]::Max(1, [int]$State.TotalUnits)
+        $doneUnits = if ($State.Done -ge $State.Total) {
+            $totalUnits
+        }
+        elseif ($State.Total -le 0) {
+            0
+        }
+        else {
+            [Math]::Floor(($State.Done / [double]$State.Total) * $totalUnits)
+        }
+
+        return @{
+            Done   = [int]$doneUnits
+            Total  = $totalUnits
+            Suffix = " MB"
+        }
+    }
+
+    return @{
+        Done   = [int]$State.Done
+        Total  = [Math]::Max(1, [int]$State.Total)
+        Suffix = ""
+    }
+}
+
+function Get-StageVerb {
+    param([string]$Title)
+
+    if ($Title -match '^\s*Compiling') {
+        return "${ansiOrange}Compiling${ansiReset}"
+    }
+
+    return "${ansiGreen}Downloading${ansiReset}"
+}
+
+function Get-StageTask {
+    param(
+        [hashtable]$State,
+        [string]$CompletedTask
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($CompletedTask)) {
+        return $CompletedTask
+    }
+
+    if ($State.Active.Count -gt 0) {
+        return $State.Active[0]
+    }
+
+    if ($State.Pending.Count -gt 0) {
+        return $State.Pending.Peek()
+    }
+
+    return "multus"
+}
+
+function Get-StageSummaryVerb {
+    param([string]$Title)
+
+    if ($Title -match '^\s*Compiling') {
+        return "compile"
+    }
+
+    return "download"
+}
+
+function Write-StageSummary {
+    param(
+        [string]$Title,
+        [hashtable]$State
+    )
+
+    $verb = Get-StageSummaryVerb -Title $Title
+    Write-Host ("{0} {1}/{2}" -f $verb, $State.Done, $State.Total)
+    Write-Host ""
+}
+
+function Format-LoadingBar {
+    param([string]$Bar)
+
+    return "${ansiOrange}${Bar}${ansiReset}"
 }
 
 function Build-FrameLines {
@@ -139,37 +358,14 @@ function Build-FrameLines {
         [string]$CompletedTask
     )
 
-    $bar = New-ProgressBar -Done $State.Done -Total $State.Total
-    $lines = New-Object System.Collections.Generic.List[string]
-    $lines.Add("[multus-install] $Title")
-    $lines.Add("Progress $bar $($State.Done)/$($State.Total) | Active: $($State.Active.Count)/$maxActive")
+    $progress = Get-DisplayProgress -State $State
+    $bar = New-ProgressBar -Done $progress.Done -Total $progress.Total
+    $coloredBar = Format-LoadingBar -Bar $bar
+    $verb = Get-StageVerb -Title $Title
+    $task = Get-StageTask -State $State -CompletedTask $CompletedTask
 
-    if ($CompletedTask) {
-        $lines.Add("Completed: $CompletedTask")
-    }
-
-    $shown = 0
-    foreach ($task in $State.Active) {
-        if ($shown -ge $maxDisplay) {
-            break
-        }
-        $lines.Add(("  [RUNNING] {0}" -f $task))
-        $shown++
-    }
-
-    foreach ($task in $State.Pending.ToArray()) {
-        if ($shown -ge $maxDisplay) {
-            break
-        }
-        $lines.Add(("  [QUEUED ] {0}" -f $task))
-        $shown++
-    }
-
-    if ($shown -eq 0) {
-        $lines.Add("  waiting for events...")
-    }
-
-    return ,$lines.ToArray()
+    $line = "{0} {1} | {2} {3}/{4}{5}" -f $verb, $task, $coloredBar, $progress.Done, $progress.Total, $progress.Suffix
+    return ,@($line)
 }
 
 function Render-Stage {
@@ -197,20 +393,12 @@ function Render-Stage {
         return
     }
 
-    $bar = New-ProgressBar -Done $State.Done -Total $State.Total
-    $activePreview = ($State.Active | Select-Object -First $maxActive) -join ", "
-    if ([string]::IsNullOrWhiteSpace($activePreview)) {
-        $activePreview = "none"
-    }
-
-    $nextLimit = [Math]::Max(0, $maxDisplay - [Math]::Min($maxActive, $State.Active.Count))
-    $nextPreview = ($State.Pending.ToArray() | Select-Object -First $nextLimit) -join ", "
-    if ([string]::IsNullOrWhiteSpace($nextPreview)) {
-        $nextPreview = "none"
-    }
-
-    $doneLabel = if ([string]::IsNullOrWhiteSpace($CompletedTask)) { "-" } else { $CompletedTask }
-    Write-Host ("[multus-install] {0} | {1} {2}/{3} | done: {4} | active: {5} | next: {6}" -f $Title, $bar, $State.Done, $State.Total, $doneLabel, $activePreview, $nextPreview)
+    $progress = Get-DisplayProgress -State $State
+    $bar = New-ProgressBar -Done $progress.Done -Total $progress.Total
+    $coloredBar = Format-LoadingBar -Bar $bar
+    $verb = Get-StageVerb -Title $Title
+    $task = Get-StageTask -State $State -CompletedTask $CompletedTask
+    Write-Host ("{0} {1} | {2} {3}/{4}{5}" -f $verb, $task, $coloredBar, $progress.Done, $progress.Total, $progress.Suffix)
 }
 
 function Join-CmdArgLine {
@@ -231,16 +419,23 @@ function Invoke-SimulatedStage {
     param(
         [string]$Mode,
         [string]$Title,
-        [string[]]$Tasks
+        [string[]]$Tasks,
+        [string]$UnitLabel = "count",
+        [int]$TotalUnits = 0
     )
 
-    $state = New-StageState -Tasks $Tasks
+    $state = New-StageState -Tasks $Tasks -UnitLabel $UnitLabel -TotalUnits $TotalUnits
+    if ($Mode -ne "interactive") {
+        Write-StageSummary -Title $Title -State $state
+    }
     Render-Stage -Mode $Mode -Title $Title -State $state -CompletedTask ""
     while ($state.Done -lt $state.Total) {
         $completed = Advance-StageState -State $state
         Render-Stage -Mode $Mode -Title $Title -State $state -CompletedTask $completed
     }
-    Render-Stage -Mode $Mode -Title $Title -State $state -CompletedTask "" -Final
+    if ($Mode -eq "interactive") {
+        Render-Stage -Mode $Mode -Title $Title -State $state -CompletedTask "" -Final
+    }
     Write-Step "$Title complete."
 }
 
@@ -251,10 +446,15 @@ function Invoke-CargoStage {
         [string[]]$Tasks,
         [string]$EventRegex,
         [string[]]$CargoArgs,
-        [string]$WorkingDir
+        [string]$WorkingDir,
+        [string]$UnitLabel = "count",
+        [int]$TotalUnits = 0
     )
 
-    $state = New-StageState -Tasks $Tasks
+    $state = New-StageState -Tasks $Tasks -UnitLabel $UnitLabel -TotalUnits $TotalUnits
+    if ($Mode -ne "interactive") {
+        Write-StageSummary -Title $Title -State $state
+    }
     Render-Stage -Mode $Mode -Title $Title -State $state -CompletedTask ""
 
     Push-Location $WorkingDir
@@ -281,16 +481,74 @@ function Invoke-CargoStage {
         Render-Stage -Mode $Mode -Title $Title -State $state -CompletedTask $completed
     }
 
-    Render-Stage -Mode $Mode -Title $Title -State $state -CompletedTask "" -Final
+    if ($Mode -eq "interactive") {
+        Render-Stage -Mode $Mode -Title $Title -State $state -CompletedTask "" -Final
+    }
+    Write-Step "$Title complete."
+}
+
+function Invoke-ProcessStage {
+    param(
+        [string]$Mode,
+        [string]$Title,
+        [string[]]$Tasks,
+        [string]$EventRegex,
+        [string]$Executable,
+        [string[]]$Arguments,
+        [string]$WorkingDir = "",
+        [string]$UnitLabel = "count",
+        [int]$TotalUnits = 0
+    )
+
+    $state = New-StageState -Tasks $Tasks -UnitLabel $UnitLabel -TotalUnits $TotalUnits
+    if ($Mode -ne "interactive") {
+        Write-StageSummary -Title $Title -State $state
+    }
+    Render-Stage -Mode $Mode -Title $Title -State $state -CompletedTask ""
+
+    $pushed = $false
+    if (-not [string]::IsNullOrWhiteSpace($WorkingDir)) {
+        Push-Location $WorkingDir
+        $pushed = $true
+    }
+
+    try {
+        & $Executable @Arguments 2>&1 | ForEach-Object {
+            $line = $_.ToString()
+            if ($line -match $EventRegex) {
+                $completed = Advance-StageState -State $state
+                Render-Stage -Mode $Mode -Title $Title -State $state -CompletedTask $completed
+            }
+        }
+
+        if ($LASTEXITCODE -ne 0) {
+            throw "$Executable $($Arguments -join ' ') failed with exit code $LASTEXITCODE."
+        }
+    }
+    finally {
+        if ($pushed) {
+            Pop-Location
+        }
+    }
+
+    while ($state.Done -lt $state.Total) {
+        $completed = Advance-StageState -State $state
+        Render-Stage -Mode $Mode -Title $Title -State $state -CompletedTask $completed
+    }
+
+    if ($Mode -eq "interactive") {
+        Render-Stage -Mode $Mode -Title $Title -State $state -CompletedTask "" -Final
+    }
     Write-Step "$Title complete."
 }
 
 $renderMode = Resolve-UiMode
 
 if ($DryRun) {
-    $packages = 1..12 | ForEach-Object { "crate-{0:00}" -f $_ }
-    Invoke-SimulatedStage -Mode $renderMode -Title "Downloading crates (parallel task runner)" -Tasks $packages
-    Invoke-SimulatedStage -Mode $renderMode -Title "Compiling crates (parallel task runner)" -Tasks (@($packages + @("multus")))
+    $packages = 1..12 | ForEach-Object { "package-{0:00}" -f $_ }
+    $dryDownloadMb = [int]($packages.Count * 12)
+    Invoke-SimulatedStage -Mode $renderMode -Title "Downloading" -Tasks $packages -UnitLabel "MB" -TotalUnits $dryDownloadMb
+    Invoke-SimulatedStage -Mode $renderMode -Title "Compiling" -Tasks (@($packages + @("multus")))
     Write-Step "Dry-run finished. No installation was performed."
     exit 0
 }
@@ -331,18 +589,22 @@ try {
         $packages = @("dependencies")
     }
 
+    $downloadTotalMb = [int][Math]::Max(64, [Math]::Round($packages.Count * 6))
+
     Invoke-CargoStage `
         -Mode $renderMode `
-        -Title "Downloading crates (parallel task runner)" `
+        -Title "Downloading" `
         -Tasks $packages `
         -EventRegex 'Downloaded\s+[^\s]+' `
         -CargoArgs @("fetch", "--locked", "--manifest-path", $manifestPath, "-vv") `
-        -WorkingDir $workDir
+        -WorkingDir $workDir `
+        -UnitLabel "MB" `
+        -TotalUnits $downloadTotalMb
 
     $compileTasks = @($packages + @("multus"))
     Invoke-CargoStage `
         -Mode $renderMode `
-        -Title "Compiling crates (parallel task runner)" `
+        -Title "Compiling" `
         -Tasks $compileTasks `
         -EventRegex 'Compiling\s+[^\s]+' `
         -CargoArgs @("install", "--path", $workDir, "--locked", "--force", "--bin", "multus", "-j", "$maxActive") `
@@ -354,12 +616,19 @@ finally {
     }
 }
 
+$pathState = Ensure-CargoBinOnPath
+if ($pathState.AddedUserPath) {
+    Write-Step "Added '$($pathState.CargoBin)' to user PATH."
+}
+if ($pathState.AddedSessionPath) {
+    Write-Step "Updated PATH for current session."
+}
+
 if (Test-Command "multus") {
     Write-Step "Installation complete."
     multus --help
 }
 else {
-    $cargoBin = Join-Path $env:USERPROFILE ".cargo\bin"
-    Write-Step "Installed, but 'multus' is not on PATH in this session."
-    Write-Host "Open a new terminal or add this path manually: $cargoBin"
+    Write-Step "Installed, but 'multus' is still not detected in this session."
+    Write-Host "Try opening a new terminal. Expected binary location: $($pathState.CargoBin)"
 }
