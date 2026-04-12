@@ -34,14 +34,38 @@ Installer behavior:
 
 - Requires Rust/Cargo to already be installed.
 - Uses a **Parallel Task Runner UI**:
-  - up to 10 packages visible
   - up to 3 active tasks in parallel
-  - finished tasks disappear and are replaced by queued tasks
+  - queued tasks rotate in when active tasks complete
+  - progress bar is shown for both download and compile stages
 - Installs the CLI command as: `multus`.
 
 Rust prerequisite (manual install):
 
 `https://www.rust-lang.org/tools/install`
+
+### Installer UI dry-run test (no real install)
+
+Windows:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\test-install-ui.ps1
+```
+
+macOS / Linux:
+
+```bash
+bash ./scripts/test-install-ui.sh
+```
+
+Manual dry-run command:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install.ps1 -DryRun -UiMode compact
+```
+
+```bash
+bash ./scripts/install.sh --dry-run --ui-mode compact
+```
 
 ## Uninstall
 

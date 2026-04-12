@@ -1,3 +1,9 @@
+param(
+    [switch]$DryRun,
+    [ValidateSet("auto", "interactive", "compact")]
+    [string]$UiMode = "auto"
+)
+
 $ErrorActionPreference = "Stop"
 if (Get-Variable -Name PSNativeCommandUseErrorActionPreference -ErrorAction SilentlyContinue) {
     $PSNativeCommandUseErrorActionPreference = $false
@@ -5,8 +11,9 @@ if (Get-Variable -Name PSNativeCommandUseErrorActionPreference -ErrorAction Sile
 
 $repoUrl = "https://github.com/raytrifeno/scraks.git"
 $repoRef = "main"
-$maxVisible = 10
+$maxDisplay = 10
 $maxActive = 3
+$script:lastFrameLineCount = 0
 
 function Write-Step {
     param([string]$Message)
@@ -16,6 +23,18 @@ function Write-Step {
 function Test-Command {
     param([string]$Name)
     return $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
+}
+
+function Resolve-UiMode {
+    if ($UiMode -ne "auto") {
+        return $UiMode
+    }
+
+    if (-not [Console]::IsOutputRedirected -and $Host.Name -eq "ConsoleHost") {
+        return "interactive"
+    }
+
+    return "compact"
 }
 
 function Ensure-Prerequisites {
@@ -78,7 +97,9 @@ function New-StageState {
 function Advance-StageState {
     param([hashtable]$State)
 
+    $completed = ""
     if ($State.Active.Count -gt 0) {
+        $completed = $State.Active[0]
         $State.Active.RemoveAt(0)
     }
 
@@ -89,39 +110,107 @@ function Advance-StageState {
     if ($State.Active.Count -lt $maxActive -and $State.Pending.Count -gt 0) {
         $State.Active.Add($State.Pending.Dequeue())
     }
+
+    return $completed
 }
 
-function Render-ParallelUi {
+function New-ProgressBar {
     param(
-        [string]$Title,
-        [hashtable]$State
+        [int]$Done,
+        [int]$Total
     )
 
-    Clear-Host
-    Write-Host "[multus-install] $Title" -ForegroundColor Yellow
-    Write-Host "Progress: $($State.Done)/$($State.Total) | Active: $($State.Active.Count)/$maxActive | Visible: $maxVisible"
-    Write-Host ""
+    $width = 24
+    if ($Total -le 0) {
+        $Total = 1
+    }
+
+    $ratio = [Math]::Min(1.0, [Math]::Max(0.0, $Done / $Total))
+    $filled = [Math]::Floor($ratio * $width)
+    $empty = $width - $filled
+
+    return ("[" + ("#" * $filled) + ("-" * $empty) + "]")
+}
+
+function Build-FrameLines {
+    param(
+        [string]$Title,
+        [hashtable]$State,
+        [string]$CompletedTask
+    )
+
+    $bar = New-ProgressBar -Done $State.Done -Total $State.Total
+    $lines = New-Object System.Collections.Generic.List[string]
+    $lines.Add("[multus-install] $Title")
+    $lines.Add("Progress $bar $($State.Done)/$($State.Total) | Active: $($State.Active.Count)/$maxActive")
+
+    if ($CompletedTask) {
+        $lines.Add("Completed: $CompletedTask")
+    }
 
     $shown = 0
     foreach ($task in $State.Active) {
-        if ($shown -ge $maxVisible) {
+        if ($shown -ge $maxDisplay) {
             break
         }
-        Write-Host ("  [RUNNING] {0}" -f $task) -ForegroundColor Cyan
+        $lines.Add(("  [RUNNING] {0}" -f $task))
         $shown++
     }
 
     foreach ($task in $State.Pending.ToArray()) {
-        if ($shown -ge $maxVisible) {
+        if ($shown -ge $maxDisplay) {
             break
         }
-        Write-Host ("  [QUEUED ] {0}" -f $task) -ForegroundColor DarkGray
+        $lines.Add(("  [QUEUED ] {0}" -f $task))
         $shown++
     }
 
     if ($shown -eq 0) {
-        Write-Host "  waiting for events..." -ForegroundColor DarkGray
+        $lines.Add("  waiting for events...")
     }
+
+    return ,$lines.ToArray()
+}
+
+function Render-Stage {
+    param(
+        [string]$Mode,
+        [string]$Title,
+        [hashtable]$State,
+        [string]$CompletedTask,
+        [switch]$Final
+    )
+
+    if ($Mode -eq "interactive") {
+        $lines = Build-FrameLines -Title $Title -State $State -CompletedTask $CompletedTask
+        if ($script:lastFrameLineCount -gt 0) {
+            Write-Host ("`e[{0}A" -f $script:lastFrameLineCount) -NoNewline
+        }
+        foreach ($line in $lines) {
+            Write-Host ("`e[2K{0}" -f $line)
+        }
+        $script:lastFrameLineCount = $lines.Count
+        if ($Final) {
+            Write-Host ""
+            $script:lastFrameLineCount = 0
+        }
+        return
+    }
+
+    $bar = New-ProgressBar -Done $State.Done -Total $State.Total
+    $activePreview = ($State.Active | Select-Object -First $maxActive) -join ", "
+    if ([string]::IsNullOrWhiteSpace($activePreview)) {
+        $activePreview = "none"
+    }
+
+    $nextLimit = [Math]::Max(0, $maxDisplay - [Math]::Min($maxActive, $State.Active.Count))
+    $nextPreview = ($State.Pending.ToArray() | Select-Object -First $nextLimit) -join ", "
+    if ([string]::IsNullOrWhiteSpace($nextPreview)) {
+        $nextPreview = "none"
+    }
+
+    $doneLabel = if ([string]::IsNullOrWhiteSpace($CompletedTask)) { "-" } else { $CompletedTask }
+    Write-Host ("[multus-install] {0} | {1} {2}/{3} | done: {4} | active: {5} | next: {6}" -f $Title, $bar, $State.Done, $State.Total, $doneLabel, $activePreview, $nextPreview)
 }
 
 function Join-CmdArgLine {
@@ -138,8 +227,26 @@ function Join-CmdArgLine {
     return ($encoded -join " ")
 }
 
+function Invoke-SimulatedStage {
+    param(
+        [string]$Mode,
+        [string]$Title,
+        [string[]]$Tasks
+    )
+
+    $state = New-StageState -Tasks $Tasks
+    Render-Stage -Mode $Mode -Title $Title -State $state -CompletedTask ""
+    while ($state.Done -lt $state.Total) {
+        $completed = Advance-StageState -State $state
+        Render-Stage -Mode $Mode -Title $Title -State $state -CompletedTask $completed
+    }
+    Render-Stage -Mode $Mode -Title $Title -State $state -CompletedTask "" -Final
+    Write-Step "$Title complete."
+}
+
 function Invoke-CargoStage {
     param(
+        [string]$Mode,
         [string]$Title,
         [string[]]$Tasks,
         [string]$EventRegex,
@@ -148,7 +255,7 @@ function Invoke-CargoStage {
     )
 
     $state = New-StageState -Tasks $Tasks
-    Render-ParallelUi -Title $Title -State $state
+    Render-Stage -Mode $Mode -Title $Title -State $state -CompletedTask ""
 
     Push-Location $WorkingDir
     try {
@@ -156,8 +263,8 @@ function Invoke-CargoStage {
         & cmd /d /c "cargo $argLine 2>&1" | ForEach-Object {
             $line = $_.ToString()
             if ($line -match $EventRegex) {
-                Advance-StageState -State $state
-                Render-ParallelUi -Title $Title -State $state
+                $completed = Advance-StageState -State $state
+                Render-Stage -Mode $Mode -Title $Title -State $state -CompletedTask $completed
             }
         }
 
@@ -170,11 +277,22 @@ function Invoke-CargoStage {
     }
 
     while ($state.Done -lt $state.Total) {
-        Advance-StageState -State $state
+        $completed = Advance-StageState -State $state
+        Render-Stage -Mode $Mode -Title $Title -State $state -CompletedTask $completed
     }
-    Render-ParallelUi -Title $Title -State $state
-    Write-Host ""
+
+    Render-Stage -Mode $Mode -Title $Title -State $state -CompletedTask "" -Final
     Write-Step "$Title complete."
+}
+
+$renderMode = Resolve-UiMode
+
+if ($DryRun) {
+    $packages = 1..12 | ForEach-Object { "crate-{0:00}" -f $_ }
+    Invoke-SimulatedStage -Mode $renderMode -Title "Downloading crates (parallel task runner)" -Tasks $packages
+    Invoke-SimulatedStage -Mode $renderMode -Title "Compiling crates (parallel task runner)" -Tasks (@($packages + @("multus")))
+    Write-Step "Dry-run finished. No installation was performed."
+    exit 0
 }
 
 Ensure-Prerequisites
@@ -214,6 +332,7 @@ try {
     }
 
     Invoke-CargoStage `
+        -Mode $renderMode `
         -Title "Downloading crates (parallel task runner)" `
         -Tasks $packages `
         -EventRegex 'Downloaded\s+[^\s]+' `
@@ -222,6 +341,7 @@ try {
 
     $compileTasks = @($packages + @("multus"))
     Invoke-CargoStage `
+        -Mode $renderMode `
         -Title "Compiling crates (parallel task runner)" `
         -Tasks $compileTasks `
         -EventRegex 'Compiling\s+[^\s]+' `
