@@ -43,21 +43,7 @@ Rust prerequisite (manual install):
 
 `https://www.rust-lang.org/tools/install`
 
-### Installer UI dry-run test (no real install)
-
-Windows:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\test-install-ui.ps1
-```
-
-macOS / Linux:
-
-```bash
-bash ./scripts/test-install-ui.sh
-```
-
-Manual dry-run command:
+### Installer UI dry-run (no real install)
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install.ps1 -DryRun -UiMode compact
