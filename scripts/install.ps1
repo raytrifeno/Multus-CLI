@@ -13,6 +13,7 @@ $repoUrl = "https://github.com/raytrifeno/scraks.git"
 $repoRef = "main"
 $maxDisplay = 10
 $maxActive = 3
+$compactRenderStride = 5
 $script:lastFrameLineCount = 0
 $ansiEsc = [char]27
 $ansiReset = "$ansiEsc[0m"
@@ -180,6 +181,25 @@ function Get-LockPackages {
     }
 
     return ,$packages.ToArray()
+}
+
+function Get-EstimatedDownloadTotalMb {
+    param([int]$PackageCount)
+
+    if ($PackageCount -le 0) {
+        $PackageCount = 1
+    }
+
+    # Heuristic only: keep MB progress realistic instead of scaling too aggressively.
+    $estimated = [int][Math]::Ceiling($PackageCount / 4.0)
+    if ($estimated -lt 24) {
+        $estimated = 24
+    }
+    if ($estimated -gt 512) {
+        $estimated = 512
+    }
+
+    return $estimated
 }
 
 function New-StageState {
@@ -464,7 +484,13 @@ function Invoke-CargoStage {
             $line = $_.ToString()
             if ($line -match $EventRegex) {
                 $completed = Advance-StageState -State $state
-                Render-Stage -Mode $Mode -Title $Title -State $state -CompletedTask $completed
+                if (
+                    $Mode -eq "interactive" -or
+                    ($state.Done % $compactRenderStride -eq 0) -or
+                    ($state.Done -eq $state.Total)
+                ) {
+                    Render-Stage -Mode $Mode -Title $Title -State $state -CompletedTask $completed
+                }
             }
         }
 
@@ -478,7 +504,13 @@ function Invoke-CargoStage {
 
     while ($state.Done -lt $state.Total) {
         $completed = Advance-StageState -State $state
-        Render-Stage -Mode $Mode -Title $Title -State $state -CompletedTask $completed
+        if (
+            $Mode -eq "interactive" -or
+            ($state.Done % $compactRenderStride -eq 0) -or
+            ($state.Done -eq $state.Total)
+        ) {
+            Render-Stage -Mode $Mode -Title $Title -State $state -CompletedTask $completed
+        }
     }
 
     if ($Mode -eq "interactive") {
@@ -517,7 +549,13 @@ function Invoke-ProcessStage {
             $line = $_.ToString()
             if ($line -match $EventRegex) {
                 $completed = Advance-StageState -State $state
-                Render-Stage -Mode $Mode -Title $Title -State $state -CompletedTask $completed
+                if (
+                    $Mode -eq "interactive" -or
+                    ($state.Done % $compactRenderStride -eq 0) -or
+                    ($state.Done -eq $state.Total)
+                ) {
+                    Render-Stage -Mode $Mode -Title $Title -State $state -CompletedTask $completed
+                }
             }
         }
 
@@ -533,7 +571,13 @@ function Invoke-ProcessStage {
 
     while ($state.Done -lt $state.Total) {
         $completed = Advance-StageState -State $state
-        Render-Stage -Mode $Mode -Title $Title -State $state -CompletedTask $completed
+        if (
+            $Mode -eq "interactive" -or
+            ($state.Done % $compactRenderStride -eq 0) -or
+            ($state.Done -eq $state.Total)
+        ) {
+            Render-Stage -Mode $Mode -Title $Title -State $state -CompletedTask $completed
+        }
     }
 
     if ($Mode -eq "interactive") {
@@ -589,7 +633,7 @@ try {
         $packages = @("dependencies")
     }
 
-    $downloadTotalMb = [int][Math]::Max(64, [Math]::Round($packages.Count * 6))
+    $downloadTotalMb = Get-EstimatedDownloadTotalMb -PackageCount $packages.Count
 
     Invoke-CargoStage `
         -Mode $renderMode `

@@ -5,6 +5,7 @@ REPO_URL="https://github.com/raytrifeno/scraks.git"
 REPO_REF="main"
 MAX_DISPLAY=10
 MAX_ACTIVE=3
+COMPACT_RENDER_STRIDE=5
 UI_MODE_INPUT="auto"
 DRY_RUN=0
 
@@ -175,6 +176,24 @@ collect_lock_packages() {
             if (!seen[$3]++) print $3;
         }
     ' "$lock_path"
+}
+
+estimate_download_total_mb() {
+    local package_count="$1"
+    if [[ "$package_count" -le 0 ]]; then
+        package_count=1
+    fi
+
+    # Heuristic only: keep MB progress realistic instead of scaling too aggressively.
+    local estimated=$(( (package_count + 3) / 4 ))
+    if [[ "$estimated" -lt 24 ]]; then
+        estimated=24
+    fi
+    if [[ "$estimated" -gt 512 ]]; then
+        estimated=512
+    fi
+
+    printf '%s' "$estimated"
 }
 
 init_stage_state() {
@@ -443,7 +462,9 @@ run_stage() {
     while IFS= read -r line; do
         if [[ "$line" =~ $event_regex ]]; then
             advance_stage_state
-            render_stage "$title" 0
+            if [[ "$RENDER_MODE" == "interactive" || $((STAGE_DONE % COMPACT_RENDER_STRIDE)) -eq 0 || "$STAGE_DONE" -eq "$STAGE_TOTAL" ]]; then
+                render_stage "$title" 0
+            fi
         fi
     done < "$fifo"
 
@@ -458,7 +479,9 @@ run_stage() {
 
     while [[ "$STAGE_DONE" -lt "$STAGE_TOTAL" ]]; do
         advance_stage_state
-        render_stage "$title" 0
+        if [[ "$RENDER_MODE" == "interactive" || $((STAGE_DONE % COMPACT_RENDER_STRIDE)) -eq 0 || "$STAGE_DONE" -eq "$STAGE_TOTAL" ]]; then
+            render_stage "$title" 0
+        fi
     done
     if [[ "$RENDER_MODE" == "interactive" ]]; then
         render_stage "$title" 1
@@ -513,10 +536,7 @@ if [[ "${#PACKAGES[@]}" -eq 0 ]]; then
     PACKAGES=("dependencies")
 fi
 
-DOWNLOAD_TOTAL_MB=$(( ${#PACKAGES[@]} * 6 ))
-if [[ "$DOWNLOAD_TOTAL_MB" -lt 64 ]]; then
-    DOWNLOAD_TOTAL_MB=64
-fi
+DOWNLOAD_TOTAL_MB="$(estimate_download_total_mb "${#PACKAGES[@]}")"
 
 init_stage_state "mb" "$DOWNLOAD_TOTAL_MB" "${PACKAGES[@]}"
 run_stage \
