@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_URL="https://github.com/raytrifeno/scraks.git"
+REPO_URL="https://github.com/raytrifeno/Multus-CLI.git"
 REPO_REF="main"
 MAX_DISPLAY=10
 MAX_ACTIVE=3
@@ -291,6 +291,33 @@ format_loading_bar() {
     printf '%s%s%s' "$ANSI_ORANGE" "$bar" "$ANSI_RESET"
 }
 
+join_task_names() {
+    local tasks=("$@")
+    if [[ "${#tasks[@]}" -eq 0 ]]; then
+        printf '%s' "-"
+        return
+    fi
+
+    local out=""
+    local i
+    for ((i=0; i<${#tasks[@]}; i++)); do
+        if [[ -n "$out" ]]; then
+            out+=", "
+        fi
+        out+="${tasks[$i]}"
+    done
+    printf '%s' "$out"
+}
+
+clear_progress_history() {
+    if [[ "$RENDER_MODE" != "interactive" ]]; then
+        return
+    fi
+
+    printf '\033[2J\033[H'
+    LAST_FRAME_LINES=0
+}
+
 stage_verb() {
     local title="$1"
     if [[ "$title" == Compiling* ]]; then
@@ -377,18 +404,28 @@ render_stage_interactive() {
     local colored_bar
     colored_bar="$(format_loading_bar "$bar")"
 
-    local line
-    line="${verb} ${task} | ${colored_bar} ${PROGRESS_DONE}/${PROGRESS_TOTAL}${PROGRESS_SUFFIX}"
+    local active
+    active="$(join_task_names "${ACTIVE_TASKS[@]}")"
+    local queue_count="${#PENDING_TASKS[@]}"
+    local title_line
+    title_line="$(format_stage_title "$title")"
+    local line1 line2 line3 line4
+    line1="${title_line}"
+    line2="${colored_bar} ${PROGRESS_DONE}/${PROGRESS_TOTAL}${PROGRESS_SUFFIX}"
+    line3="Now: ${verb} ${task}"
+    line4="Active: ${active} | Queue: ${queue_count}"
 
     if [[ "$LAST_FRAME_LINES" -gt 0 ]]; then
         printf '\033[%sA' "$LAST_FRAME_LINES"
     fi
 
-    printf '\033[2K%s\n' "$line"
-    LAST_FRAME_LINES=1
+    printf '\033[2K%s\n' "$line1"
+    printf '\033[2K%s\n' "$line2"
+    printf '\033[2K%s\n' "$line3"
+    printf '\033[2K%s\n' "$line4"
+    LAST_FRAME_LINES=4
 
     if [[ "$final" -eq 1 ]]; then
-        printf '\n'
         LAST_FRAME_LINES=0
     fi
 }
@@ -438,7 +475,9 @@ run_simulated_stage() {
     if [[ "$RENDER_MODE" == "interactive" ]]; then
         render_stage "$title" 1
     fi
-    log "${title} complete."
+    if [[ "$RENDER_MODE" != "interactive" ]]; then
+        log "${title} complete."
+    fi
 }
 
 run_stage() {
@@ -486,7 +525,9 @@ run_stage() {
     if [[ "$RENDER_MODE" == "interactive" ]]; then
         render_stage "$title" 1
     fi
-    log "${title} complete."
+    if [[ "$RENDER_MODE" != "interactive" ]]; then
+        log "${title} complete."
+    fi
 }
 
 RENDER_MODE="$(resolve_ui_mode)"
@@ -500,6 +541,7 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
     run_simulated_stage "Downloading" "mb" "$DRY_DOWNLOAD_MB" "${DRY_TASKS[@]}"
     COMPILE_TASKS=("${DRY_TASKS[@]}" "multus")
     run_simulated_stage "Compiling" "count" 0 "${COMPILE_TASKS[@]}"
+    clear_progress_history
     log "Dry-run finished. No installation was performed."
     exit 0
 fi
@@ -550,6 +592,8 @@ run_stage \
     "Compiling" \
     'Compiling[[:space:]]+[^[:space:]]+' \
     cargo install --path "$WORK_DIR" --locked --force --bin multus -j "$MAX_ACTIVE"
+
+clear_progress_history
 
 ensure_cargo_bin_on_path
 

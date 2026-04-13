@@ -8,7 +8,9 @@ use crate::cli::{
 };
 use crate::core::page::{parse_page_selection, validate_pages};
 use crate::types::{PdfToolError, Result};
-use crate::update::{check_version_state, update_multus, VersionState, UPDATE_REPO_REF, UPDATE_REPO_URL};
+use crate::update::{
+    UPDATE_REPO_REF, UPDATE_REPO_URL, VersionState, check_version_state, update_multus,
+};
 
 pub(crate) fn handle_split(args: SplitArgs) -> Result<i32> {
     let input_value = if let Some(input) = args.input {
@@ -36,7 +38,8 @@ pub(crate) fn handle_split(args: SplitArgs) -> Result<i32> {
         output
     } else {
         crate::print_step("OUTPUT");
-        let value = crate::prompt_optional("Save to which directory? (empty = current directory): ")?;
+        let value =
+            crate::prompt_optional("Save to which directory? (empty = current directory): ")?;
         if value.is_empty() {
             env::current_dir()
                 .map_err(|e| PdfToolError::new(format!("Failed to read current directory: {e}")))?
@@ -89,7 +92,8 @@ pub(crate) fn handle_compress(args: CompressArgs) -> Result<i32> {
             .and_then(OsStr::to_str)
             .unwrap_or("output")
     );
-    let output_path = crate::build_output_file_path(&input_path, Some(&output_value), &default_name)?;
+    let output_path =
+        crate::build_output_file_path(&input_path, Some(&output_value), &default_name)?;
 
     let stats = crate::run_with_spinner("Compressing file...", || {
         crate::compress_pdf(&input_path, &output_path, args.level)
@@ -105,7 +109,9 @@ pub(crate) fn handle_compress(args: CompressArgs) -> Result<i32> {
 
     println!("Compression complete!");
     if stats.fallback_to_original {
-        println!("This file is already optimized: compressed output was larger, so the original size was kept.");
+        println!(
+            "This file is already optimized: compressed output was larger, so the original size was kept."
+        );
     }
     println!("Level:           {}", stats.level);
     println!("Images optimized: {}", stats.images_optimized);
@@ -168,9 +174,12 @@ pub(crate) fn handle_merge(args: MergeArgs) -> Result<i32> {
     };
 
     let default_name = "merged.pdf".to_string();
-    let output_path = crate::build_output_file_path(&input_paths[0], Some(&output_value), &default_name)?;
+    let output_path =
+        crate::build_output_file_path(&input_paths[0], Some(&output_value), &default_name)?;
 
-    crate::run_with_spinner("Merging files...", || crate::merge_pdfs(&input_paths, &output_path))?;
+    crate::run_with_spinner("Merging files...", || {
+        crate::merge_pdfs(&input_paths, &output_path)
+    })?;
     println!("Merge complete!");
     println!("Saved to: {}", output_path.display());
     Ok(0)
@@ -217,12 +226,9 @@ pub(crate) fn handle_encrypt(args: EncryptArgs) -> Result<i32> {
         }
     } else if prompted_password {
         crate::print_step("OWNER PASSWORD");
-        let value = crate::prompt_optional("Enter owner password (empty = same as user password): ")?;
-        if value.is_empty() {
-            None
-        } else {
-            Some(value)
-        }
+        let value =
+            crate::prompt_optional("Enter owner password (empty = same as user password): ")?;
+        if value.is_empty() { None } else { Some(value) }
     } else {
         None
     };
@@ -241,7 +247,8 @@ pub(crate) fn handle_encrypt(args: EncryptArgs) -> Result<i32> {
             .and_then(OsStr::to_str)
             .unwrap_or("output")
     );
-    let output_path = crate::build_output_file_path(&input_path, Some(&output_value), &default_name)?;
+    let output_path =
+        crate::build_output_file_path(&input_path, Some(&output_value), &default_name)?;
 
     crate::run_with_spinner("Encrypting file...", || {
         crate::encrypt_pdf(
@@ -261,7 +268,8 @@ pub(crate) fn handle_images_to_pdf(args: ImagesToPdfArgs) -> Result<i32> {
         args.inputs
     } else {
         crate::print_step("INPUT IMAGES");
-        let raw = crate::prompt_non_empty("Enter image file paths (separate with spaces or commas): ")?;
+        let raw =
+            crate::prompt_non_empty("Enter image file paths (separate with spaces or commas): ")?;
         if raw.contains(',') {
             raw.split(',')
                 .map(str::trim)
@@ -311,7 +319,8 @@ pub(crate) fn handle_images_to_pdf(args: ImagesToPdfArgs) -> Result<i32> {
             .and_then(OsStr::to_str)
             .unwrap_or("output")
     );
-    let output_path = crate::build_output_file_path(&input_paths[0], Some(&output_value), &default_name)?;
+    let output_path =
+        crate::build_output_file_path(&input_paths[0], Some(&output_value), &default_name)?;
 
     crate::run_with_spinner("Building output from images...", || {
         crate::images_to_pdf(&input_paths, &output_path)
@@ -384,7 +393,8 @@ pub(crate) fn handle_watermark(args: WatermarkArgs) -> Result<i32> {
             .and_then(OsStr::to_str)
             .unwrap_or("output")
     );
-    let output_path = crate::build_output_file_path(&input_path, Some(&output_value), &default_name)?;
+    let output_path =
+        crate::build_output_file_path(&input_path, Some(&output_value), &default_name)?;
 
     crate::run_with_spinner("Applying watermark...", || {
         crate::apply_watermark(&input_path, &output_path, &watermark_text)
@@ -437,7 +447,8 @@ pub(crate) fn handle_reorder(args: ReorderArgs) -> Result<i32> {
             .and_then(OsStr::to_str)
             .unwrap_or("output")
     );
-    let output_path = crate::build_output_file_path(&input_path, Some(&output_value), &default_name)?;
+    let output_path =
+        crate::build_output_file_path(&input_path, Some(&output_value), &default_name)?;
 
     crate::run_with_spinner("Reordering pages...", || {
         crate::reorder_pdf(&input_path, &output_path, &order_value)

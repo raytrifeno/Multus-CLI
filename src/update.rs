@@ -3,7 +3,7 @@ use std::process::Command;
 
 use crate::types::{PdfToolError, Result};
 
-pub const UPDATE_REPO_URL: &str = "https://github.com/raytrifeno/scraks.git";
+pub const UPDATE_REPO_URL: &str = "https://github.com/raytrifeno/Multus-CLI.git";
 pub const UPDATE_REPO_REF: &str = "main";
 
 #[derive(Debug, Clone)]
@@ -67,10 +67,7 @@ fn extract_version_from_cargo_toml(cargo_toml: &str) -> Option<String> {
 
 fn parse_version_segments(version: &str) -> Vec<u64> {
     let normalized = version.trim().trim_start_matches('v');
-    let core = normalized
-        .split(['-', '+'])
-        .next()
-        .unwrap_or(normalized);
+    let core = normalized.split(['-', '+']).next().unwrap_or(normalized);
 
     core.split('.')
         .map(|segment| {
@@ -111,9 +108,7 @@ pub(crate) fn fetch_remote_version(repo: &str, branch: &str) -> Result<String> {
         ))
     })?;
 
-    let url = format!(
-        "https://raw.githubusercontent.com/{owner}/{name}/{branch}/Cargo.toml"
-    );
+    let url = format!("https://raw.githubusercontent.com/{owner}/{name}/{branch}/Cargo.toml");
     let response = ureq::get(&url)
         .call()
         .map_err(|e| PdfToolError::new(format!("Failed to fetch remote version: {e}")))?;
@@ -121,9 +116,8 @@ pub(crate) fn fetch_remote_version(repo: &str, branch: &str) -> Result<String> {
         .into_string()
         .map_err(|e| PdfToolError::new(format!("Failed to read remote metadata: {e}")))?;
 
-    extract_version_from_cargo_toml(&body).ok_or_else(|| {
-        PdfToolError::new("Failed to parse remote version from Cargo.toml.")
-    })
+    extract_version_from_cargo_toml(&body)
+        .ok_or_else(|| PdfToolError::new("Failed to parse remote version from Cargo.toml."))
 }
 
 pub(crate) fn check_version_state(repo: &str, branch: &str) -> VersionState {

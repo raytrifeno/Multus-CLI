@@ -9,7 +9,7 @@ if (Get-Variable -Name PSNativeCommandUseErrorActionPreference -ErrorAction Sile
     $PSNativeCommandUseErrorActionPreference = $false
 }
 
-$repoUrl = "https://github.com/raytrifeno/scraks.git"
+$repoUrl = "https://github.com/raytrifeno/Multus-CLI.git"
 $repoRef = "main"
 $maxDisplay = 10
 $maxActive = 3
@@ -371,6 +371,27 @@ function Format-LoadingBar {
     return "${ansiOrange}${Bar}${ansiReset}"
 }
 
+function Join-TaskNames {
+    param([string[]]$Tasks)
+
+    if (-not $Tasks -or $Tasks.Count -eq 0) {
+        return "-"
+    }
+
+    return ($Tasks -join ", ")
+}
+
+function Clear-ProgressHistory {
+    param([string]$Mode)
+
+    if ($Mode -ne "interactive") {
+        return
+    }
+
+    $script:lastFrameLineCount = 0
+    Clear-Host
+}
+
 function Build-FrameLines {
     param(
         [string]$Title,
@@ -384,8 +405,13 @@ function Build-FrameLines {
     $verb = Get-StageVerb -Title $Title
     $task = Get-StageTask -State $State -CompletedTask $CompletedTask
 
-    $line = "{0} {1} | {2} {3}/{4}{5}" -f $verb, $task, $coloredBar, $progress.Done, $progress.Total, $progress.Suffix
-    return ,@($line)
+    $active = Join-TaskNames -Tasks $State.Active
+    $queueCount = $State.Pending.Count
+    $line1 = $Title
+    $line2 = "{0} {1}/{2}{3}" -f $coloredBar, $progress.Done, $progress.Total, $progress.Suffix
+    $line3 = "Now: {0} {1}" -f $verb, $task
+    $line4 = "Active: {0} | Queue: {1}" -f $active, $queueCount
+    return ,@($line1, $line2, $line3, $line4)
 }
 
 function Render-Stage {
@@ -456,7 +482,9 @@ function Invoke-SimulatedStage {
     if ($Mode -eq "interactive") {
         Render-Stage -Mode $Mode -Title $Title -State $state -CompletedTask "" -Final
     }
-    Write-Step "$Title complete."
+    if ($Mode -ne "interactive") {
+        Write-Step "$Title complete."
+    }
 }
 
 function Invoke-CargoStage {
@@ -516,7 +544,9 @@ function Invoke-CargoStage {
     if ($Mode -eq "interactive") {
         Render-Stage -Mode $Mode -Title $Title -State $state -CompletedTask "" -Final
     }
-    Write-Step "$Title complete."
+    if ($Mode -ne "interactive") {
+        Write-Step "$Title complete."
+    }
 }
 
 function Invoke-ProcessStage {
@@ -583,7 +613,9 @@ function Invoke-ProcessStage {
     if ($Mode -eq "interactive") {
         Render-Stage -Mode $Mode -Title $Title -State $state -CompletedTask "" -Final
     }
-    Write-Step "$Title complete."
+    if ($Mode -ne "interactive") {
+        Write-Step "$Title complete."
+    }
 }
 
 $renderMode = Resolve-UiMode
@@ -593,6 +625,7 @@ if ($DryRun) {
     $dryDownloadMb = [int]($packages.Count * 12)
     Invoke-SimulatedStage -Mode $renderMode -Title "Downloading" -Tasks $packages -UnitLabel "MB" -TotalUnits $dryDownloadMb
     Invoke-SimulatedStage -Mode $renderMode -Title "Compiling" -Tasks (@($packages + @("multus")))
+    Clear-ProgressHistory -Mode $renderMode
     Write-Step "Dry-run finished. No installation was performed."
     exit 0
 }
@@ -659,6 +692,8 @@ finally {
         Remove-Item -Path $workDir -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
+
+Clear-ProgressHistory -Mode $renderMode
 
 $pathState = Ensure-CargoBinOnPath
 if ($pathState.AddedUserPath) {

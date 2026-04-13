@@ -1,15 +1,6 @@
 # Multus (Rust CLI)
 
-<pre><span style="color:#ff9100">
-███╗   ███╗██╗   ██╗██╗  ████████╗██╗   ██╗███████╗
-████╗ ████║██║   ██║██║  ╚══██╔══╝██║   ██║██╔════╝
-██╔████╔██║██║   ██║██║     ██║   ██║   ██║███████╗
-██║╚██╔╝██║██║   ██║██║     ██║   ██║   ██║╚════██║
-██║ ╚═╝ ██║╚██████╔╝███████╗██║   ╚██████╔╝███████║
-╚═╝     ╚═╝ ╚═════╝ ╚══════╝╚═╝    ╚═════╝ ╚══════╝
-</span></pre>
-
-Multus is a Rust-based CLI tool for document workflows directly from the terminal: fast, lightweight, and without web services.
+Multus is a Rust CLI tool for document workflows, designed to run directly in terminal.
 
 ## Key Features
 
@@ -17,25 +8,138 @@ Multus is a Rust-based CLI tool for document workflows directly from the termina
 - Compress documents for smaller file size.
 - Merge multiple documents into one file.
 - Encrypt files with a password.
-- Convert images into document output.
-- Add text watermark to supported files.
+- Convert images into PDF.
+- Add text watermark to `.pdf` and `.docx`.
 - Reorder pages with custom order.
-- Update the tool with the `multus update` command.
+- Update the tool using `multus update`.
 
 ## Install
 
 Source repository:
 
-`https://github.com/raytrifeno/scraks.git`
+`https://github.com/raytrifeno/Multus-CLI.git`
 
 ### Windows (PowerShell)
 
 ```powershell
-iwr https://raw.githubusercontent.com/raytrifeno/scraks/main/scripts/install.ps1 -UseBasicParsing | iex
+iwr https://raw.githubusercontent.com/raytrifeno/Multus-CLI/main/scripts/install.ps1 -UseBasicParsing | iex
 ```
 
 ### macOS / Linux
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/raytrifeno/scraks/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/raytrifeno/Multus-CLI/main/scripts/install.sh | bash
+```
+
+Installer behavior:
+
+- Requires Rust/Cargo to already be installed.
+- Uses a parallel task-runner UI with rotating active tasks.
+- Shows progress for both download and compile stages.
+- Installs executable command: `multus`.
+
+Rust prerequisite:
+
+`https://www.rust-lang.org/tools/install`
+
+## Uninstall
+
+### Windows (PowerShell)
+
+```powershell
+iwr https://raw.githubusercontent.com/raytrifeno/Multus-CLI/main/scripts/uninstall.ps1 -UseBasicParsing | iex
+```
+
+### macOS / Linux
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/raytrifeno/Multus-CLI/main/scripts/uninstall.sh | bash
+```
+
+## Build
+
+```powershell
+cargo build --release
+```
+
+## Usage
+
+### Interactive Mode
+
+```powershell
+multus
+```
+
+### Split
+
+```powershell
+multus split -i document.pdf -p "1-5,8,10-12" -o .\output\
+```
+
+### Compress
+
+```powershell
+multus compress -i document.pdf -l 2 -o compressed.pdf
+```
+
+Level:
+
+- `1` = light
+- `2` = balanced (default)
+- `3` = aggressive
+
+### Merge
+
+```powershell
+multus merge -i file1.pdf file2.pdf file3.pdf -o merged.pdf
+```
+
+### Encrypt
+
+```powershell
+multus encrypt -i document.pdf -p "mypassword" -o encrypted.pdf
+```
+
+### Convert Images to PDF
+
+```powershell
+multus images-to-pdf -i img1.png img2.jpg -o output.pdf
+```
+
+Alias:
+
+```powershell
+multus img2pdf -i img1.png img2.jpg -o output.pdf
+```
+
+### Watermark
+
+```powershell
+multus watermark -i document.pdf -t "CONFIDENTIAL" -o watermarked.pdf
+```
+
+Also supports `.docx` input.
+
+### Reorder Pages
+
+```powershell
+multus reorder -i document.pdf -p "10,1-9" -o reordered.pdf
+```
+
+Alias:
+
+```powershell
+multus eorder -i document.pdf -p "10,1-9" -o reordered.pdf
+```
+
+## Page Selection Format
+
+Use:
+
+`1-5,8,10-12`
+
+## Tests
+
+```powershell
+cargo test
 ```
