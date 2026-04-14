@@ -35,7 +35,7 @@ pub(crate) use ui::spinner::run_with_spinner;
 fn interactive_version_line() -> String {
     match check_version_state(UPDATE_REPO_URL, UPDATE_REPO_REF) {
         VersionState::UpdateAvailable { current, latest } => {
-            format!("Update tersedia: v{current} -> v{latest} (pilih menu Update)")
+            format!("Update available: v{current} -> v{latest} (use Update menu)")
         }
         VersionState::UpToDate { current } => format!("Version current: v{current}"),
         VersionState::Unknown { current } => format!("Version current: v{current}"),

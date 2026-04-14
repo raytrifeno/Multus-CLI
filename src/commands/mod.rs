@@ -464,15 +464,15 @@ pub(crate) fn handle_update(args: UpdateArgs) -> Result<i32> {
 
     match check_version_state(&repo, &branch) {
         VersionState::UpToDate { current } => {
-            println!("Sudah versi terbaru (v{current}).");
+            println!("Already up to date (v{current}).");
             return Ok(0);
         }
         VersionState::UpdateAvailable { current, latest } => {
-            println!("Update tersedia: v{current} -> v{latest}");
+            println!("Update available: v{current} -> v{latest}");
         }
         VersionState::Unknown { current } => {
             println!("Version current: v{current}");
-            println!("Tidak bisa memverifikasi versi remote, mencoba update langsung...");
+            println!("Could not verify remote version. Trying direct update...");
         }
     }
 

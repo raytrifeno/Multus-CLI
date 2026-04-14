@@ -12,6 +12,7 @@ fn render_arrow_menu(
     menu_items: &[(&str, &str)],
     selected_index: usize,
     version_line: &str,
+    selected_prefix: &str,
 ) -> Result<()> {
     let mut stdout = io::stdout();
     execute!(stdout, MoveTo(0, 0), Clear(ClearType::All))
@@ -36,7 +37,7 @@ fn render_arrow_menu(
                 stdout,
                 SetForegroundColor(orange),
                 SetAttribute(Attribute::Bold),
-                Print(format!("❯ {numbered}\n")),
+                Print(format!("{selected_prefix} {numbered}\n")),
                 SetAttribute(Attribute::Reset),
                 ResetColor
             )
@@ -51,13 +52,31 @@ fn render_arrow_menu(
         stdout,
         Print("\n"),
         Print(format!("{version_line}\n")),
-        Print("Quit: tekan tombol Q dua kali.\n")
+        Print("Quit: press Q twice.\n")
     )
     .map_err(|e| PdfToolError::new(format!("Failed to draw menu: {e}")))?;
     stdout
         .flush()
         .map_err(|e| PdfToolError::new(format!("Failed to flush menu: {e}")))?;
     Ok(())
+}
+
+fn should_use_alternate_screen() -> bool {
+    if std::env::var("MULTUS_NO_ALT_SCREEN")
+        .map(|v| v == "1")
+        .unwrap_or(false)
+    {
+        return false;
+    }
+    !cfg!(target_os = "linux")
+}
+
+fn selected_prefix_symbol() -> &'static str {
+    if cfg!(target_os = "linux") {
+        ">"
+    } else {
+        "❯"
+    }
 }
 
 pub(crate) fn choose_command_with_arrows(
@@ -71,20 +90,28 @@ pub(crate) fn choose_command_with_arrows(
     terminal::enable_raw_mode()
         .map_err(|e| PdfToolError::new(format!("Failed to enable raw mode: {e}")))?;
     let mut stdout = io::stdout();
-    execute!(
-        stdout,
-        EnterAlternateScreen,
-        MoveTo(0, 0),
-        Clear(ClearType::All),
-        Hide
-    )
-    .map_err(|e| PdfToolError::new(format!("Failed to initialize interactive menu: {e}")))?;
+    let use_alternate_screen = should_use_alternate_screen();
+    if use_alternate_screen {
+        execute!(
+            stdout,
+            EnterAlternateScreen,
+            MoveTo(0, 0),
+            Clear(ClearType::All),
+            Hide
+        )
+        .map_err(|e| PdfToolError::new(format!("Failed to initialize interactive menu: {e}")))?;
+    } else {
+        execute!(stdout, MoveTo(0, 0), Clear(ClearType::All), Hide).map_err(|e| {
+            PdfToolError::new(format!("Failed to initialize interactive menu: {e}"))
+        })?;
+    }
 
     let mut selected = 0usize;
     let mut q_press_count = 0u8;
+    let selected_prefix = selected_prefix_symbol();
     let menu_result = (|| -> Result<Option<String>> {
         loop {
-            render_arrow_menu(menu_items, selected, version_line)?;
+            render_arrow_menu(menu_items, selected, version_line, selected_prefix)?;
 
             let evt = event::read()
                 .map_err(|e| PdfToolError::new(format!("Failed to read keyboard input: {e}")))?;
@@ -122,13 +149,17 @@ pub(crate) fn choose_command_with_arrows(
         }
     })();
 
-    let _ = execute!(
-        stdout,
-        Show,
-        ResetColor,
-        SetAttribute(Attribute::Reset),
-        LeaveAlternateScreen
-    );
+    if use_alternate_screen {
+        let _ = execute!(
+            stdout,
+            Show,
+            ResetColor,
+            SetAttribute(Attribute::Reset),
+            LeaveAlternateScreen
+        );
+    } else {
+        let _ = execute!(stdout, Show, ResetColor, SetAttribute(Attribute::Reset));
+    }
     let _ = terminal::disable_raw_mode();
     menu_result
 }
