@@ -8,8 +8,8 @@ mod update;
 use clap::{CommandFactory, Parser};
 use cli::{Cli, Commands, menu_items, normalize_argv};
 use commands::{
-    handle_compress, handle_encrypt, handle_images_to_pdf, handle_merge, handle_reorder,
-    handle_split, handle_update, handle_watermark,
+    handle_compress, handle_convert_image, handle_encrypt, handle_images_to_pdf, handle_merge,
+    handle_reorder, handle_split, handle_update, handle_watermark,
 };
 use std::env;
 use std::io::{self, IsTerminal};
@@ -17,6 +17,7 @@ use types::Result;
 use ui::menu::choose_command_with_arrows;
 use update::{UPDATE_REPO_REF, UPDATE_REPO_URL, VersionState, check_version_state};
 
+pub(crate) use core::image::convert_image_format;
 pub(crate) use core::path::{
     build_output_file_path, ensure_output_dir, has_docx_extension, has_pdf_extension,
     has_supported_image_extension, open_pdf, resolve_input_path,
@@ -63,6 +64,7 @@ fn execute_command(cli: Cli) -> Result<i32> {
         Some(Commands::Merge(args)) => handle_merge(args),
         Some(Commands::Encrypt(args)) => handle_encrypt(args),
         Some(Commands::ImagesToPdf(args)) => handle_images_to_pdf(args),
+        Some(Commands::ConvertImage(args)) => handle_convert_image(args),
         Some(Commands::Watermark(args)) => handle_watermark(args),
         Some(Commands::Reorder(args)) => handle_reorder(args),
         Some(Commands::Update(args)) => handle_update(args),

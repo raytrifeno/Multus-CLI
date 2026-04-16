@@ -9,6 +9,7 @@ Multus is a Rust CLI tool for document workflows, designed to run directly in te
 - Merge multiple documents into one file.
 - Encrypt files with a password.
 - Convert images into PDF.
+- Convert image format to JPG or PNG.
 - Add text watermark to `.pdf` and `.docx`.
 - Reorder pages with custom order.
 - Update the tool using `multus update`.
@@ -110,6 +111,18 @@ Alias:
 
 ```powershell
 multus img2pdf -i img1.png img2.jpg -o output.pdf
+```
+
+### Convert Image Format
+
+```powershell
+multus convert-image -i img1.png img2.bmp -f jpg -o .\converted\
+```
+
+Alias:
+
+```powershell
+multus imgconvert -i img1.png -f png -o output.png
 ```
 
 ### Watermark

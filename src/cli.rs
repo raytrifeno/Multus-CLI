@@ -4,7 +4,7 @@ use clap::{Args, Parser, Subcommand};
 #[command(
     name = "multus",
     version,
-    about = "Multus: Split, Compress, Merge, Encrypt, Image Conversion, Watermark, Reorder, Update."
+    about = "Multus: Split, Compress, Merge, Encrypt, Image Conversion, Image Format Conversion, Watermark, Reorder, Update."
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -19,6 +19,8 @@ pub enum Commands {
     Encrypt(EncryptArgs),
     #[command(name = "images-to-pdf", alias = "img2pdf")]
     ImagesToPdf(ImagesToPdfArgs),
+    #[command(name = "convert-image", aliases = ["imgconvert", "imgext"])]
+    ConvertImage(ConvertImageArgs),
     Watermark(WatermarkArgs),
     #[command(alias = "eorder")]
     Reorder(ReorderArgs),
@@ -88,6 +90,26 @@ pub struct ImagesToPdfArgs {
 }
 
 #[derive(Args, Debug, Default, Clone)]
+pub struct ConvertImageArgs {
+    #[arg(
+        short = 'i',
+        long = "inputs",
+        num_args = 1..,
+        help = "Paths to input image files."
+    )]
+    pub inputs: Vec<String>,
+    #[arg(
+        short = 'f',
+        long = "format",
+        value_parser = ["jpg", "jpeg", "png"],
+        help = "Target output format: jpg or png."
+    )]
+    pub format: Option<String>,
+    #[arg(short, long, help = "Output filename or directory.")]
+    pub output: Option<String>,
+}
+
+#[derive(Args, Debug, Default, Clone)]
 pub struct WatermarkArgs {
     #[arg(short, long, help = "Path to input file.")]
     pub input: Option<String>,
@@ -133,6 +155,9 @@ pub fn normalize_argv(mut argv: Vec<String>) -> Vec<String> {
             | "encrypt"
             | "images-to-pdf"
             | "img2pdf"
+            | "convert-image"
+            | "imgconvert"
+            | "imgext"
             | "watermark"
             | "reorder"
             | "eorder"
@@ -150,13 +175,14 @@ pub fn normalize_argv(mut argv: Vec<String>) -> Vec<String> {
     argv
 }
 
-pub fn menu_items() -> [(&'static str, &'static str); 8] {
+pub fn menu_items() -> [(&'static str, &'static str); 9] {
     [
         ("Split pages", "split"),
         ("Compress file size", "compress"),
         ("Merge multiple files", "merge"),
         ("Encrypt file with password", "encrypt"),
-        ("Convert images", "images-to-pdf"),
+        ("Convert images to PDF", "images-to-pdf"),
+        ("Convert image format (JPG/PNG)", "convert-image"),
         ("Add watermark", "watermark"),
         ("Reorder pages", "reorder"),
         ("Update Multus", "update"),

@@ -3,8 +3,8 @@ use std::ffi::OsStr;
 use std::path::PathBuf;
 
 use crate::cli::{
-    CompressArgs, EncryptArgs, ImagesToPdfArgs, MergeArgs, ReorderArgs, SplitArgs, UpdateArgs,
-    WatermarkArgs,
+    CompressArgs, ConvertImageArgs, EncryptArgs, ImagesToPdfArgs, MergeArgs, ReorderArgs,
+    SplitArgs, UpdateArgs, WatermarkArgs,
 };
 use crate::core::page::{parse_page_selection, validate_pages};
 use crate::types::{PdfToolError, Result};
@@ -328,6 +328,127 @@ pub(crate) fn handle_images_to_pdf(args: ImagesToPdfArgs) -> Result<i32> {
 
     println!("Conversion complete!");
     println!("Saved to: {}", output_path.display());
+    Ok(0)
+}
+
+fn normalize_target_image_format(value: &str) -> Result<&'static str> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "jpg" | "jpeg" => Ok("jpg"),
+        "png" => Ok("png"),
+        _ => Err(PdfToolError::new(
+            "Invalid image format. Supported values: jpg, png.",
+        )),
+    }
+}
+
+pub(crate) fn handle_convert_image(args: ConvertImageArgs) -> Result<i32> {
+    let input_values = if !args.inputs.is_empty() {
+        args.inputs
+    } else {
+        crate::print_step("INPUT IMAGES");
+        let raw =
+            crate::prompt_non_empty("Enter image file paths (separate with spaces or commas): ")?;
+        if raw.contains(',') {
+            raw.split(',')
+                .map(str::trim)
+                .filter(|x| !x.is_empty())
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        } else {
+            raw.split_whitespace()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        }
+    };
+
+    let input_paths: Vec<PathBuf> = input_values
+        .iter()
+        .map(|value| crate::resolve_input_path(value))
+        .collect::<Result<Vec<_>>>()?;
+    if input_paths.is_empty() {
+        return Err(PdfToolError::new("No image files were provided."));
+    }
+
+    for path in &input_paths {
+        if !path.exists() {
+            return Err(PdfToolError::new(format!(
+                "File not found: '{}'",
+                path.display()
+            )));
+        }
+        if !crate::has_supported_image_extension(path) {
+            return Err(PdfToolError::new(format!(
+                "Unsupported image format: '{}'. Supported: png, jpg, jpeg, bmp, gif, tif, tiff",
+                path.display()
+            )));
+        }
+    }
+
+    let format_value = if let Some(format) = args.format {
+        format
+    } else {
+        crate::print_step("TARGET FORMAT");
+        crate::prompt_non_empty("Convert to which format? (jpg/png): ")?
+    };
+    let target_ext = normalize_target_image_format(&format_value)?;
+
+    let output_value = if let Some(output) = args.output {
+        output
+    } else {
+        crate::print_step("OUTPUT");
+        crate::prompt_optional("Save as? (empty = auto output path): ")?
+    };
+
+    if input_paths.len() == 1 {
+        let input_path = &input_paths[0];
+        let default_name = format!(
+            "{}_converted.{target_ext}",
+            input_path
+                .file_stem()
+                .and_then(OsStr::to_str)
+                .unwrap_or("output")
+        );
+        let output_path =
+            crate::build_output_file_path(input_path, Some(&output_value), &default_name)?;
+
+        crate::run_with_spinner("Converting image...", || {
+            crate::convert_image_format(input_path, &output_path, target_ext)
+        })?;
+        println!("Conversion complete!");
+        println!("Saved to: {}", output_path.display());
+        return Ok(0);
+    }
+
+    if !output_value.trim().is_empty() && PathBuf::from(output_value.trim()).extension().is_some() {
+        return Err(PdfToolError::new(
+            "For multiple images, output must be a directory path.",
+        ));
+    }
+
+    let output_dir = if output_value.trim().is_empty() {
+        env::current_dir()
+            .map_err(|e| PdfToolError::new(format!("Failed to read current directory: {e}")))?
+    } else {
+        crate::ensure_output_dir(Some(&output_value))?
+    };
+
+    let converted_count = crate::run_with_spinner("Converting images...", || {
+        for input_path in &input_paths {
+            let output_path = output_dir.join(format!(
+                "{}_converted.{target_ext}",
+                input_path
+                    .file_stem()
+                    .and_then(OsStr::to_str)
+                    .unwrap_or("output")
+            ));
+            crate::convert_image_format(input_path, &output_path, target_ext)?;
+        }
+        Ok(input_paths.len())
+    })?;
+
+    println!("Conversion complete!");
+    println!("Converted {converted_count} file(s) to .{target_ext}");
+    println!("Saved to: {}", output_dir.display());
     Ok(0)
 }
 
