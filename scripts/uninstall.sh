@@ -1,45 +1,44 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+BINARY_NAME="multus"
+PRIMARY_DIR="$HOME/.local/bin"
+SYSTEM_DIR="/usr/local/bin"
+
 log() {
-    printf '%s\n' "[multus-uninstall] $1"
+    printf '%s\n' "$1"
 }
 
-has_cmd() {
-    command -v "$1" >/dev/null 2>&1
-}
-
-confirm_yes() {
-    local prompt="$1"
-    printf '%s [y/N] ' "$prompt"
-    read -r answer
-    [[ "$answer" =~ ^([yY]|[yY][eE][sS])$ ]]
-}
-
-CARGO_HOME_DIR="${CARGO_HOME:-$HOME/.cargo}"
-RUSTUP_HOME_DIR="${RUSTUP_HOME:-$HOME/.rustup}"
-
-if has_cmd cargo; then
-    log "Removing multus binary with cargo uninstall..."
-    if ! cargo uninstall multus; then
-        log "cargo uninstall returned non-zero status (continuing cleanup)."
+remove_file_if_exists() {
+    local path="$1"
+    if [[ -f "$path" ]]; then
+        rm -f "$path"
+        log "Removed: $path"
     fi
-else
-    log "cargo not found. Skipping cargo uninstall step."
+}
+
+remove_path_export_if_present() {
+    local profile="$1"
+    if [[ ! -f "$profile" ]]; then
+        return
+    fi
+    local before
+    before="$(cat "$profile")"
+    local after
+    after="$(printf '%s\n' "$before" | sed '/# Added by Multus installer/,+1d')"
+    if [[ "$before" != "$after" ]]; then
+        printf '%s' "$after" > "$profile"
+        log "Updated PATH profile: $profile"
+    fi
+}
+
+remove_file_if_exists "${PRIMARY_DIR}/${BINARY_NAME}"
+if [[ -w "$SYSTEM_DIR" ]]; then
+    remove_file_if_exists "${SYSTEM_DIR}/${BINARY_NAME}"
 fi
 
-if confirm_yes "Remove downloaded Cargo package cache used by Multus (registry + git cache)?"; then
-    rm -rf "${CARGO_HOME_DIR}/registry" "${CARGO_HOME_DIR}/git"
-    log "Cargo cache removed."
-else
-    log "Cargo cache kept."
-fi
-
-if confirm_yes "Also remove Rust installation (~/.rustup and ~/.cargo)?"; then
-    rm -rf "${RUSTUP_HOME_DIR}" "${CARGO_HOME_DIR}"
-    log "Rust toolchain and Cargo home removed."
-else
-    log "Rust installation kept."
-fi
+remove_path_export_if_present "$HOME/.profile"
+remove_path_export_if_present "$HOME/.bashrc"
+remove_path_export_if_present "$HOME/.zshrc"
 
 log "Uninstall complete."

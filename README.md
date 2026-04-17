@@ -34,14 +34,16 @@ curl -fsSL https://raw.githubusercontent.com/raytrifeno/Multus-CLI/main/scripts/
 
 Installer behavior:
 
-- Requires Rust/Cargo to already be installed.
-- Uses a parallel task-runner UI with rotating active tasks.
-- Shows progress for both download and compile stages.
+- Downloads a prebuilt binary from the latest GitHub Release.
+- Does not require Rust or Cargo on end-user machines.
 - Installs executable command: `multus`.
 
-Rust prerequisite:
+Supported release assets:
 
-`https://www.rust-lang.org/tools/install`
+- `multus-windows-x64.zip`
+- `multus-linux-x64.tar.gz`
+- `multus-macos-x64.tar.gz`
+- `multus-macos-arm64.tar.gz`
 
 ## Uninstall
 
@@ -62,6 +64,13 @@ curl -fsSL https://raw.githubusercontent.com/raytrifeno/Multus-CLI/main/scripts/
 ```powershell
 cargo build --release
 ```
+
+## Release Automation
+
+GitHub Actions builds and publishes release binaries on:
+
+- tag push (`v*`)
+- manual workflow dispatch
 
 ## Usage
 

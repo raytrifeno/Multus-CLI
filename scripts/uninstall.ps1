@@ -1,54 +1,71 @@
 $ErrorActionPreference = "Stop"
 
+$installDir = Join-Path $env:LOCALAPPDATA "Programs\Multus\bin"
+$binaryPath = Join-Path $installDir "multus.exe"
+
 function Write-Step {
     param([string]$Message)
-    Write-Host "[multus-uninstall] $Message" -ForegroundColor Yellow
+    Write-Host $Message -ForegroundColor Yellow
 }
 
-function Test-Command {
-    param([string]$Name)
-    return $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
+function Normalize-PathEntry {
+    param([string]$PathEntry)
+    if ([string]::IsNullOrWhiteSpace($PathEntry)) {
+        return ""
+    }
+    return $PathEntry.Trim().TrimEnd('\')
 }
 
-function Confirm-Yes {
-    param([string]$Prompt)
+function Remove-PathEntry {
+    param(
+        [string]$PathValue,
+        [string]$Entry
+    )
 
-    $answer = Read-Host "$Prompt [y/N]"
-    return $answer -match '^(y|yes)$'
+    $normalizedEntry = Normalize-PathEntry -PathEntry $Entry
+    if ([string]::IsNullOrWhiteSpace($normalizedEntry) -or [string]::IsNullOrWhiteSpace($PathValue)) {
+        return $PathValue
+    }
+
+    $parts = @()
+    foreach ($candidate in ($PathValue -split ';')) {
+        if ((Normalize-PathEntry -PathEntry $candidate) -ine $normalizedEntry) {
+            if (-not [string]::IsNullOrWhiteSpace($candidate)) {
+                $parts += $candidate
+            }
+        }
+    }
+    return ($parts -join ';')
 }
 
-$cargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $env:USERPROFILE ".cargo" }
-$rustupHome = if ($env:RUSTUP_HOME) { $env:RUSTUP_HOME } else { Join-Path $env:USERPROFILE ".rustup" }
+if (Test-Path $binaryPath -PathType Leaf) {
+    Remove-Item -Path $binaryPath -Force
+    Write-Step "Removed: $binaryPath"
+}
+else {
+    Write-Step "Binary not found at: $binaryPath"
+}
 
-if (Test-Command "cargo") {
-    Write-Step "Removing multus binary with cargo uninstall..."
-    & cargo uninstall multus
-    if ($LASTEXITCODE -ne 0) {
-        Write-Step "cargo uninstall returned exit code $LASTEXITCODE (continuing cleanup)."
+if (Test-Path $installDir -PathType Container) {
+    $remaining = Get-ChildItem -Path $installDir -Force -ErrorAction SilentlyContinue
+    if ($null -eq $remaining -or $remaining.Count -eq 0) {
+        Remove-Item -Path $installDir -Force
+        Write-Step "Removed empty directory: $installDir"
     }
 }
-else {
-    Write-Step "cargo not found. Skipping cargo uninstall step."
+
+$userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+$newUserPath = Remove-PathEntry -PathValue $userPath -Entry $installDir
+if ($newUserPath -ne $userPath) {
+    [Environment]::SetEnvironmentVariable("Path", $newUserPath, "User")
+    Write-Step "Removed install directory from user PATH."
 }
 
-if (Confirm-Yes "Remove downloaded Cargo package cache used by Multus (registry + git cache)?") {
-    $registryPath = Join-Path $cargoHome "registry"
-    $gitPath = Join-Path $cargoHome "git"
-    Remove-Item -Path $registryPath -Recurse -Force -ErrorAction SilentlyContinue
-    Remove-Item -Path $gitPath -Recurse -Force -ErrorAction SilentlyContinue
-    Write-Step "Cargo cache removed."
-}
-else {
-    Write-Step "Cargo cache kept."
-}
-
-if (Confirm-Yes "Also remove Rust installation (~/.rustup and ~/.cargo)?") {
-    Remove-Item -Path $rustupHome -Recurse -Force -ErrorAction SilentlyContinue
-    Remove-Item -Path $cargoHome -Recurse -Force -ErrorAction SilentlyContinue
-    Write-Step "Rust toolchain and Cargo home removed."
-}
-else {
-    Write-Step "Rust installation kept."
+$sessionPath = $env:Path
+$newSessionPath = Remove-PathEntry -PathValue $sessionPath -Entry $installDir
+if ($newSessionPath -ne $sessionPath) {
+    $env:Path = $newSessionPath
+    Write-Step "Updated PATH for current session."
 }
 
 Write-Step "Uninstall complete."
