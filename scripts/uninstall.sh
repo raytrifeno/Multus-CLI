@@ -2,6 +2,7 @@
 set -euo pipefail
 
 BINARY_NAME="multus"
+LEGACY_CARGO_DIR="$HOME/.cargo/bin"
 PRIMARY_DIR="$HOME/.local/bin"
 SYSTEM_DIR="/usr/local/bin"
 
@@ -33,6 +34,7 @@ remove_path_export_if_present() {
 }
 
 remove_file_if_exists "${PRIMARY_DIR}/${BINARY_NAME}"
+remove_file_if_exists "${LEGACY_CARGO_DIR}/${BINARY_NAME}"
 if [[ -w "$SYSTEM_DIR" ]]; then
     remove_file_if_exists "${SYSTEM_DIR}/${BINARY_NAME}"
 fi
@@ -42,3 +44,4 @@ remove_path_export_if_present "$HOME/.bashrc"
 remove_path_export_if_present "$HOME/.zshrc"
 
 log "Uninstall complete."
+log "If your current shell still remembers the old path, run: hash -r"

@@ -119,7 +119,10 @@ fn uninstall_unix(exe_path: &Path) -> Result<String> {
         remove_path_export_if_present(&home.join(".zshrc"))?;
     }
 
-    Ok("Uninstall complete.".to_string())
+    Ok(
+        "Uninstall complete. If the current shell still remembers the old path, run `hash -r` or open a new shell."
+            .to_string(),
+    )
 }
 
 pub(crate) fn uninstall_multus() -> Result<String> {

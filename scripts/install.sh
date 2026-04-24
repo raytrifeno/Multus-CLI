@@ -5,6 +5,7 @@ REPO_OWNER="raytrifeno"
 REPO_NAME="Multus-CLI"
 BINARY_NAME="multus"
 INSTALL_DIR_DEFAULT="${HOME}/.local/bin"
+LEGACY_CARGO_BIN="${HOME}/.cargo/bin"
 UI_MODE_INPUT="auto"
 DRY_RUN=0
 
@@ -41,6 +42,11 @@ log() {
 
 has_cmd() {
     command -v "$1" >/dev/null 2>&1
+}
+
+path_contains_dir() {
+    local dir="$1"
+    [[ ":$PATH:" == *":$dir:"* ]]
 }
 
 resolve_asset_name() {
@@ -87,6 +93,14 @@ resolve_asset_name() {
 }
 
 resolve_install_dir() {
+    if path_contains_dir "$LEGACY_CARGO_BIN"; then
+        mkdir -p "$LEGACY_CARGO_BIN"
+        if [[ -w "$LEGACY_CARGO_BIN" ]]; then
+            printf '%s' "$LEGACY_CARGO_BIN"
+            return
+        fi
+    fi
+
     if [[ -w "/usr/local/bin" ]]; then
         printf '/usr/local/bin'
         return
@@ -175,10 +189,6 @@ ensure_path_contains_install_dir "$install_dir"
 hash -r 2>/dev/null || true
 
 log "Installation complete."
-if has_cmd multus; then
-    multus --help >/dev/null
-    log "Command available: multus"
-else
-    log "Binary installed to ${install_dir}/${BINARY_NAME}."
-    log "Open a new terminal if command is not yet in PATH."
-fi
+log "Binary installed to ${install_dir}/${BINARY_NAME}."
+log "If your current shell still points to an old multus path, run: hash -r"
+log "Opening a new terminal also refreshes the command path."

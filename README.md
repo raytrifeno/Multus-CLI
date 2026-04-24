@@ -35,6 +35,12 @@ iwr https://raw.githubusercontent.com/raytrifeno/Multus-CLI/main/scripts/install
 curl -fsSL https://raw.githubusercontent.com/raytrifeno/Multus-CLI/main/scripts/install.sh | bash
 ```
 
+If you just uninstalled or replaced `multus` in the same shell session and Bash still points to an old path, run:
+
+```bash
+hash -r
+```
+
 Installer behavior:
 
 - Downloads a prebuilt binary from the latest GitHub Release.
@@ -60,6 +66,12 @@ iwr https://raw.githubusercontent.com/raytrifeno/Multus-CLI/main/scripts/uninsta
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/raytrifeno/Multus-CLI/main/scripts/uninstall.sh | bash
+```
+
+If the current shell still remembers the old command path after uninstall, run:
+
+```bash
+hash -r
 ```
 
 ## Build
