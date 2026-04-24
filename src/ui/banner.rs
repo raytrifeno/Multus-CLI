@@ -10,6 +10,10 @@ const MULTUS_ASCII_LOGO_PLAIN: &[&str] = &[
     "|_|  |_|\\__,_|_|\\__|\\__,_|___/",
 ];
 
+pub(crate) fn multus_logo_lines() -> &'static [&'static str] {
+    MULTUS_ASCII_LOGO_PLAIN
+}
+
 pub(crate) fn multus_orange() -> Color {
     Color::Rgb {
         r: 255,
@@ -25,7 +29,7 @@ pub(crate) fn queue_multus_logo<W: Write>(stdout: &mut W) -> io::Result<()> {
         SetAttribute(Attribute::Bold)
     )?;
 
-    for line in MULTUS_ASCII_LOGO_PLAIN {
+    for line in multus_logo_lines() {
         queue!(stdout, Print(*line), Print("\n"))?;
     }
 

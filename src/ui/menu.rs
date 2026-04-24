@@ -6,17 +6,26 @@ use crossterm::{execute, queue};
 use std::io::{self, Write};
 
 use crate::types::{PdfToolError, Result};
-use crate::ui::banner::{multus_orange, queue_multus_logo};
+use crate::ui::banner::{multus_logo_lines, multus_orange};
 
-const MENU_WIDTH: usize = 56;
-
-fn pad_line(value: &str) -> String {
-    let mut line = value.chars().take(MENU_WIDTH).collect::<String>();
-    let len = line.chars().count();
-    if len < MENU_WIDTH {
-        line.push_str(&" ".repeat(MENU_WIDTH - len));
+fn fit_line(value: &str, width: u16) -> String {
+    let usable_width = usize::from(width.saturating_sub(1));
+    if usable_width == 0 {
+        return String::new();
     }
-    line
+
+    value.chars().take(usable_width).collect()
+}
+
+fn queue_line<W: Write>(stdout: &mut W, row: &mut u16, width: u16, value: &str) -> io::Result<()> {
+    queue!(
+        stdout,
+        MoveTo(0, *row),
+        Clear(ClearType::CurrentLine),
+        Print(fit_line(value, width))
+    )?;
+    *row = row.saturating_add(1);
+    Ok(())
 }
 
 fn render_arrow_menu(
@@ -25,53 +34,89 @@ fn render_arrow_menu(
     version_line: &str,
 ) -> Result<()> {
     let mut stdout = io::stdout();
-    queue!(stdout, MoveTo(0, 0), Clear(ClearType::FromCursorDown), Hide)
+    let (width, _) = terminal::size().unwrap_or((80, 24));
+    let orange = multus_orange();
+    let mut row = 0u16;
+
+    queue!(stdout, MoveTo(0, 0), Clear(ClearType::All), Hide)
         .map_err(|e| PdfToolError::new(format!("Failed to draw menu: {e}")))?;
 
-    queue_multus_logo(&mut stdout)
-        .map_err(|e| PdfToolError::new(format!("Failed to draw menu: {e}")))?;
     queue!(
         stdout,
-        SetAttribute(Attribute::Bold),
-        Print("Multus document tools\n"),
-        SetAttribute(Attribute::Reset),
-        Print("Up/Down: move  Enter: select  Esc: Split  QQ: back from prompt\n"),
-        Print("Q twice: quit\n")
+        SetForegroundColor(orange),
+        SetAttribute(Attribute::Bold)
     )
     .map_err(|e| PdfToolError::new(format!("Failed to draw menu: {e}")))?;
 
-    queue!(stdout, Print("\n"), Print("Commands\n"))
+    for line in multus_logo_lines() {
+        queue_line(&mut stdout, &mut row, width, line)
+            .map_err(|e| PdfToolError::new(format!("Failed to draw menu: {e}")))?;
+    }
+
+    queue!(stdout, ResetColor, SetAttribute(Attribute::Reset),)
         .map_err(|e| PdfToolError::new(format!("Failed to draw menu: {e}")))?;
 
-    let orange = multus_orange();
+    queue_line(&mut stdout, &mut row, width, "")
+        .map_err(|e| PdfToolError::new(format!("Failed to draw menu: {e}")))?;
+    queue!(
+        stdout,
+        MoveTo(0, row),
+        SetAttribute(Attribute::Bold),
+        Clear(ClearType::CurrentLine),
+        Print(fit_line("Multus document tools", width)),
+        SetAttribute(Attribute::Reset),
+    )
+    .map_err(|e| PdfToolError::new(format!("Failed to draw menu: {e}")))?;
+    row = row.saturating_add(1);
+
+    queue_line(&mut stdout, &mut row, width, "Up/Down: move  Enter: select")
+        .map_err(|e| PdfToolError::new(format!("Failed to draw menu: {e}")))?;
+    queue_line(
+        &mut stdout,
+        &mut row,
+        width,
+        "Esc: Split  QQ: back from prompt  Q twice: quit",
+    )
+    .map_err(|e| PdfToolError::new(format!("Failed to draw menu: {e}")))?;
+
+    queue_line(&mut stdout, &mut row, width, "")
+        .map_err(|e| PdfToolError::new(format!("Failed to draw menu: {e}")))?;
+    queue_line(&mut stdout, &mut row, width, "Commands")
+        .map_err(|e| PdfToolError::new(format!("Failed to draw menu: {e}")))?;
+
     for (index, (label, _command)) in menu_items.iter().enumerate() {
         let marker = if index == selected_index { ">" } else { " " };
-        let numbered = format!("{marker} {:02}. {label}", index + 1);
-        let line = pad_line(&numbered);
+        let line = format!("{marker} {:02}. {label}", index + 1);
+
         if index == selected_index {
             queue!(
                 stdout,
+                MoveTo(0, row),
+                Clear(ClearType::CurrentLine),
                 SetForegroundColor(orange),
                 SetAttribute(Attribute::Bold),
-                Print(line),
+                Print(fit_line(&line, width)),
                 SetAttribute(Attribute::Reset),
                 ResetColor,
-                Print("\n")
             )
             .map_err(|e| PdfToolError::new(format!("Failed to draw menu: {e}")))?;
         } else {
-            queue!(stdout, Print(line), Print("\n"))
+            queue_line(&mut stdout, &mut row, width, &line)
                 .map_err(|e| PdfToolError::new(format!("Failed to draw menu: {e}")))?;
+            continue;
         }
+        row = row.saturating_add(1);
     }
 
+    queue_line(&mut stdout, &mut row, width, "")
+        .map_err(|e| PdfToolError::new(format!("Failed to draw menu: {e}")))?;
     queue!(
         stdout,
-        Print("\n"),
+        MoveTo(0, row),
+        Clear(ClearType::CurrentLine),
         SetForegroundColor(orange),
-        Print(pad_line(version_line)),
+        Print(fit_line(version_line, width)),
         ResetColor,
-        Print("\n")
     )
     .map_err(|e| PdfToolError::new(format!("Failed to draw menu: {e}")))?;
     stdout
@@ -168,4 +213,19 @@ pub(crate) fn choose_command_with_arrows(
     }
     let _ = terminal::disable_raw_mode();
     menu_result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fit_line;
+
+    #[test]
+    fn fit_line_keeps_one_column_margin() {
+        assert_eq!(fit_line("1234567890", 6), "12345");
+    }
+
+    #[test]
+    fn fit_line_handles_zero_width() {
+        assert_eq!(fit_line("abc", 0), "");
+    }
 }

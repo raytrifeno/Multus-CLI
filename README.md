@@ -111,13 +111,13 @@ Release assets published by the workflow:
 To publish a new version:
 
 ```powershell
-# 1. Update version in Cargo.toml, for example 0.2.0
+# 1. Update version in Cargo.toml, for example 1.0.0
 cargo test --locked
 git add .
-git commit -m "Release v0.2.0"
-git tag v0.2.0
+git commit -m "Release v1.0.0"
+git tag v1.0.0
 git push origin main
-git push origin v0.2.0
+git push origin v1.0.0
 ```
 
 After the workflow finishes, the install commands above will pull the newest binary release.
