@@ -1,8 +1,6 @@
 use crossterm::cursor::{Hide, MoveTo, Show};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
-use crossterm::style::{
-    Attribute, Color, Print, ResetColor, SetAttribute, SetBackgroundColor, SetForegroundColor,
-};
+use crossterm::style::{Attribute, Print, ResetColor, SetAttribute, SetForegroundColor};
 use crossterm::terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{execute, queue};
 use std::io::{self, Write};
@@ -53,8 +51,7 @@ fn render_arrow_menu(
         if index == selected_index {
             queue!(
                 stdout,
-                SetForegroundColor(Color::Black),
-                SetBackgroundColor(orange),
+                SetForegroundColor(orange),
                 SetAttribute(Attribute::Bold),
                 Print(line),
                 SetAttribute(Attribute::Reset),
