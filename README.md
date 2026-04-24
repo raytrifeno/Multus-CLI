@@ -13,12 +13,15 @@ Multus is a Rust CLI tool for document workflows, designed to run directly in te
 - Add text watermark to `.pdf` and `.docx`.
 - Reorder pages with custom order.
 - Update the tool using `multus update`.
+- Uninstall the tool using `multus uninstall`.
 
 ## Install
 
 Source repository:
 
 `https://github.com/raytrifeno/Multus-CLI.git`
+
+The installer downloads a prebuilt binary from the latest GitHub Release. End users do not need Rust, Cargo, or build tools.
 
 ### Windows (PowerShell)
 
@@ -65,12 +68,47 @@ curl -fsSL https://raw.githubusercontent.com/raytrifeno/Multus-CLI/main/scripts/
 cargo build --release
 ```
 
+## Project Structure
+
+```text
+src/
+  cli.rs            CLI argument and subcommand definitions.
+  main.rs           Application entrypoint and command dispatch.
+  commands/         Thin command handlers, one file per user-facing feature.
+  core/             Reusable document/image logic with no prompt/UI ownership.
+  core/pdf/         PDF operations, one file per PDF feature.
+  ui/               Terminal UI helpers.
+  updater/          Version check, update, and uninstall internals.
+```
+
 ## Release Automation
 
 GitHub Actions builds and publishes release binaries on:
 
 - tag push (`v*`)
 - manual workflow dispatch
+
+Release assets published by the workflow:
+
+- `multus-windows-x64.zip`
+- `multus-linux-x64.tar.gz`
+- `multus-macos-x64.tar.gz`
+- `multus-macos-arm64.tar.gz`
+- `SHA256SUMS.txt`
+
+To publish a new version:
+
+```powershell
+# 1. Update version in Cargo.toml, for example 0.2.0
+cargo test --locked
+git add .
+git commit -m "Release v0.2.0"
+git tag v0.2.0
+git push origin main
+git push origin v0.2.0
+```
+
+After the workflow finishes, the install commands above will pull the newest binary release.
 
 ## Usage
 
@@ -152,6 +190,26 @@ Alias:
 
 ```powershell
 multus eorder -i document.pdf -p "10,1-9" -o reordered.pdf
+```
+
+### Update
+
+```powershell
+multus update
+```
+
+Multus checks the remote version while you use normal commands. If a newer version is available, it prints a notice with this update command.
+
+### Uninstall
+
+```powershell
+multus uninstall
+```
+
+For non-interactive scripts:
+
+```powershell
+multus uninstall --yes
 ```
 
 ## Page Selection Format

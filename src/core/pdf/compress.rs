@@ -21,32 +21,48 @@ struct CompressionProfile {
     jpeg_quality: u8,
     max_dimension: u32,
     min_pixels: u32,
+    min_savings_bytes: usize,
+    zlib_level: u8,
+    max_objects_per_stream: usize,
 }
 
 fn compression_profile(level: u8) -> CompressionProfile {
     match level {
         1 => CompressionProfile {
-            jpeg_quality: 78,
-            max_dimension: 2600,
-            min_pixels: 200_000,
+            jpeg_quality: 82,
+            max_dimension: 2800,
+            min_pixels: 350_000,
+            min_savings_bytes: 4096,
+            zlib_level: 6,
+            max_objects_per_stream: 100,
         },
         3 => CompressionProfile {
-            jpeg_quality: 42,
-            max_dimension: 1450,
-            min_pixels: 60_000,
+            jpeg_quality: 38,
+            max_dimension: 1400,
+            min_pixels: 50_000,
+            min_savings_bytes: 1024,
+            zlib_level: 9,
+            max_objects_per_stream: 250,
         },
         _ => CompressionProfile {
-            jpeg_quality: 58,
-            max_dimension: 1900,
-            min_pixels: 100_000,
+            jpeg_quality: 62,
+            max_dimension: 2000,
+            min_pixels: 120_000,
+            min_savings_bytes: 2048,
+            zlib_level: 7,
+            max_objects_per_stream: 180,
         },
     }
+}
+
+fn normalized_level(level: u8) -> u8 {
+    level.clamp(1, 3)
 }
 
 fn stream_has_filter(stream: &Stream, filter_name: &[u8]) -> bool {
     stream
         .filters()
-        .map(|filters| filters.iter().any(|name| *name == filter_name))
+        .map(|filters| filters.contains(&filter_name))
         .unwrap_or(false)
 }
 
@@ -72,6 +88,10 @@ fn decode_raw_image_stream(stream: &Stream) -> Option<(DynamicImage, bool)> {
         .and_then(Object::as_i64)
         .unwrap_or(8);
     if bits != 8 {
+        return None;
+    }
+
+    if stream.dict.get(b"Decode").is_ok() {
         return None;
     }
 
@@ -126,13 +146,15 @@ fn decode_raw_image_stream(stream: &Stream) -> Option<(DynamicImage, bool)> {
         }
         let img = RgbImage::from_raw(width, height, rgb)?;
         Some((DynamicImage::ImageRgb8(img), false))
-    } else {
+    } else if color_name.as_slice() == b"DeviceRGB" {
         let needed = pixel_count.checked_mul(3)?;
         if raw.len() < needed {
             return None;
         }
         let img = RgbImage::from_raw(width, height, raw[..needed].to_vec())?;
         Some((DynamicImage::ImageRgb8(img), false))
+    } else {
+        None
     }
 }
 
@@ -194,7 +216,12 @@ fn recompress_image_stream(stream: &mut Stream, profile: CompressionProfile) -> 
     {
         return false;
     }
-    if encoded.is_empty() || encoded.len() >= stream.content.len() {
+    if encoded.is_empty() {
+        return false;
+    }
+
+    let old_len = stream.content.len();
+    if encoded.len().saturating_add(profile.min_savings_bytes) >= old_len {
         return false;
     }
 
@@ -213,13 +240,13 @@ fn recompress_image_stream(stream: &mut Stream, profile: CompressionProfile) -> 
 }
 
 fn optimize_images_for_compression(doc: &mut Document, level: u8) -> usize {
-    let profile = compression_profile(level);
+    let profile = compression_profile(normalized_level(level));
     let mut optimized = 0usize;
     for object in doc.objects.values_mut() {
-        if let Ok(stream) = object.as_stream_mut() {
-            if recompress_image_stream(stream, profile) {
-                optimized += 1;
-            }
+        if let Ok(stream) = object.as_stream_mut()
+            && recompress_image_stream(stream, profile)
+        {
+            optimized += 1;
         }
     }
     optimized
@@ -230,6 +257,7 @@ pub(crate) fn compress_pdf(
     output_path: &Path,
     level: u8,
 ) -> Result<CompressionStats> {
+    let level = normalized_level(level);
     let original_bytes = fs::read(input_path).map_err(|e| {
         PdfToolError::new(format!(
             "Failed to read input file '{}': {e}",
@@ -244,22 +272,15 @@ pub(crate) fn compress_pdf(
     doc.compress();
 
     let mut compressed_bytes = Vec::new();
-    match level {
-        2 => doc
-            .save_modern(&mut compressed_bytes)
-            .map_err(|e| PdfToolError::new(format!("Failed to compress file: {e}")))?,
-        _ => {
-            let zlib_level = if level == 1 { 6 } else { 9 };
-            let options = SaveOptions::builder()
-                .use_object_streams(true)
-                .use_xref_streams(true)
-                .max_objects_per_stream(200)
-                .compression_level(zlib_level)
-                .build();
-            doc.save_with_options(&mut compressed_bytes, options)
-                .map_err(|e| PdfToolError::new(format!("Failed to compress file: {e}")))?;
-        }
-    }
+    let profile = compression_profile(level);
+    let options = SaveOptions::builder()
+        .use_object_streams(true)
+        .use_xref_streams(true)
+        .max_objects_per_stream(profile.max_objects_per_stream)
+        .compression_level(u32::from(profile.zlib_level))
+        .build();
+    doc.save_with_options(&mut compressed_bytes, options)
+        .map_err(|e| PdfToolError::new(format!("Failed to compress file: {e}")))?;
 
     let compressed_size = compressed_bytes.len() as u64;
     if compressed_size >= original_size {
@@ -291,4 +312,32 @@ pub(crate) fn compress_pdf(
         images_optimized,
         level,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{compression_profile, normalized_level};
+
+    #[test]
+    fn compression_level_is_clamped_to_supported_profiles() {
+        assert_eq!(normalized_level(0), 1);
+        assert_eq!(normalized_level(1), 1);
+        assert_eq!(normalized_level(2), 2);
+        assert_eq!(normalized_level(3), 3);
+        assert_eq!(normalized_level(9), 3);
+    }
+
+    #[test]
+    fn aggressive_profile_trades_quality_for_smaller_images() {
+        let light = compression_profile(1);
+        let balanced = compression_profile(2);
+        let aggressive = compression_profile(3);
+
+        assert!(light.jpeg_quality > balanced.jpeg_quality);
+        assert!(balanced.jpeg_quality > aggressive.jpeg_quality);
+        assert!(light.max_dimension > balanced.max_dimension);
+        assert!(balanced.max_dimension > aggressive.max_dimension);
+        assert!(light.min_pixels > balanced.min_pixels);
+        assert!(balanced.min_pixels > aggressive.min_pixels);
+    }
 }

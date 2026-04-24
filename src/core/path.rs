@@ -28,22 +28,22 @@ fn user_home_dir() -> Option<PathBuf> {
 }
 
 fn expand_user(path_text: &str) -> PathBuf {
-    if path_text == "~" {
-        if let Some(home) = user_home_dir() {
-            return home;
-        }
+    if path_text == "~"
+        && let Some(home) = user_home_dir()
+    {
+        return home;
     }
 
-    if let Some(rest) = path_text.strip_prefix("~/") {
-        if let Some(home) = user_home_dir() {
-            return home.join(rest);
-        }
+    if let Some(rest) = path_text.strip_prefix("~/")
+        && let Some(home) = user_home_dir()
+    {
+        return home.join(rest);
     }
 
-    if let Some(rest) = path_text.strip_prefix("~\\") {
-        if let Some(home) = user_home_dir() {
-            return home.join(rest);
-        }
+    if let Some(rest) = path_text.strip_prefix("~\\")
+        && let Some(home) = user_home_dir()
+    {
+        return home.join(rest);
     }
 
     PathBuf::from(path_text)
@@ -72,7 +72,7 @@ pub(crate) fn ensure_output_dir(output_arg: Option<&str>) -> Result<PathBuf> {
         env::current_dir()
             .map_err(|e| PdfToolError::new(format!("Failed to read current directory: {e}")))?
     } else {
-        let base = PathBuf::from(cleaned);
+        let base = expand_user(&cleaned);
         if base.is_absolute() {
             base
         } else {
@@ -153,6 +153,62 @@ pub(crate) fn open_pdf(input_path: &Path) -> Result<(Vec<u8>, usize)> {
     Ok((bytes, total_pages))
 }
 
+fn absolute_path_for_compare(path: &Path) -> Result<PathBuf> {
+    if path.exists() {
+        return fs::canonicalize(path).map_err(|e| {
+            PdfToolError::new(format!("Failed to resolve path '{}': {e}", path.display()))
+        });
+    }
+
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        env::current_dir()
+            .map_err(|e| PdfToolError::new(format!("Failed to read current directory: {e}")))?
+            .join(path)
+    };
+
+    if let (Some(parent), Some(file_name)) = (absolute.parent(), absolute.file_name())
+        && parent.exists()
+    {
+        let parent = fs::canonicalize(parent).map_err(|e| {
+            PdfToolError::new(format!(
+                "Failed to resolve output directory '{}': {e}",
+                parent.display()
+            ))
+        })?;
+        return Ok(parent.join(file_name));
+    }
+
+    Ok(absolute)
+}
+
+fn paths_match(left: &Path, right: &Path) -> bool {
+    if cfg!(windows) {
+        left.to_string_lossy()
+            .eq_ignore_ascii_case(&right.to_string_lossy())
+    } else {
+        left == right
+    }
+}
+
+pub(crate) fn ensure_output_is_not_input(
+    output_path: &Path,
+    input_paths: &[PathBuf],
+) -> Result<()> {
+    let output = absolute_path_for_compare(output_path)?;
+    for input_path in input_paths {
+        let input = absolute_path_for_compare(input_path)?;
+        if paths_match(&output, &input) {
+            return Err(PdfToolError::new(format!(
+                "Output path must be different from input path: '{}'",
+                output_path.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn build_output_file_path(
     input_path: &Path,
     output_arg: Option<&str>,
@@ -170,7 +226,7 @@ pub(crate) fn build_output_file_path(
             .unwrap_or_else(|| Path::new("."))
             .join(default_filename)
     } else {
-        let given = PathBuf::from(raw_output);
+        let given = expand_user(&raw_output);
         if given.is_absolute() {
             given
         } else {
@@ -202,4 +258,46 @@ pub(crate) fn build_output_file_path(
     }
 
     Ok(output_path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ensure_output_is_not_input, has_pdf_extension, strip_wrapping_quotes};
+    use std::fs;
+    use std::path::Path;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn strip_wrapping_quotes_handles_common_inputs() {
+        assert_eq!(strip_wrapping_quotes("\"hello\""), "hello");
+        assert_eq!(strip_wrapping_quotes("'world'"), "world");
+        assert_eq!(strip_wrapping_quotes("  no-quotes  "), "no-quotes");
+        assert_eq!(strip_wrapping_quotes("\" spaced \""), "spaced");
+    }
+
+    #[test]
+    fn has_pdf_extension_is_case_insensitive() {
+        assert!(has_pdf_extension(Path::new("file.pdf")));
+        assert!(has_pdf_extension(Path::new("file.PDF")));
+        assert!(!has_pdf_extension(Path::new("file.docx")));
+        assert!(!has_pdf_extension(Path::new("file")));
+    }
+
+    #[test]
+    fn output_path_cannot_point_to_input_file() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_else(|_| Duration::from_secs(0))
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("multus-path-test-{nonce}"));
+        fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("input.pdf");
+        fs::write(&input, b"placeholder").unwrap();
+
+        let result = ensure_output_is_not_input(&input, std::slice::from_ref(&input));
+        let _ = fs::remove_file(&input);
+        let _ = fs::remove_dir(&dir);
+
+        assert!(result.is_err());
+    }
 }

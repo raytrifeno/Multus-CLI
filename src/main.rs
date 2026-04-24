@@ -3,24 +3,24 @@ mod commands;
 mod core;
 mod types;
 mod ui;
-mod update;
+mod updater;
 
 use clap::{CommandFactory, Parser};
 use cli::{Cli, Commands, menu_items, normalize_argv};
 use commands::{
     handle_compress, handle_convert_image, handle_encrypt, handle_images_to_pdf, handle_merge,
-    handle_reorder, handle_split, handle_update, handle_watermark,
+    handle_reorder, handle_split, handle_uninstall, handle_update, handle_watermark,
 };
 use std::env;
 use std::io::{self, IsTerminal};
 use types::Result;
 use ui::menu::choose_command_with_arrows;
-use update::{UPDATE_REPO_REF, UPDATE_REPO_URL, VersionState, check_version_state};
+use updater::{UPDATE_REPO_REF, UPDATE_REPO_URL, VersionState, check_version_state};
 
 pub(crate) use core::image::convert_image_format;
 pub(crate) use core::path::{
-    build_output_file_path, ensure_output_dir, has_docx_extension, has_pdf_extension,
-    has_supported_image_extension, open_pdf, resolve_input_path,
+    build_output_file_path, ensure_output_dir, ensure_output_is_not_input, has_docx_extension,
+    has_pdf_extension, has_supported_image_extension, open_pdf, resolve_input_path,
 };
 pub(crate) use core::pdf::compress::compress_pdf;
 pub(crate) use core::pdf::encrypt::encrypt_pdf;
@@ -68,6 +68,7 @@ fn execute_command(cli: Cli) -> Result<i32> {
         Some(Commands::Watermark(args)) => handle_watermark(args),
         Some(Commands::Reorder(args)) => handle_reorder(args),
         Some(Commands::Update(args)) => handle_update(args),
+        Some(Commands::Uninstall(args)) => handle_uninstall(args),
         None => {
             let mut cmd = Cli::command();
             let _ = cmd.print_help();
@@ -75,6 +76,32 @@ fn execute_command(cli: Cli) -> Result<i32> {
             Ok(1)
         }
     }
+}
+
+fn should_skip_update_notice(cli: &Cli) -> bool {
+    matches!(
+        cli.command,
+        Some(Commands::Update(_)) | Some(Commands::Uninstall(_)) | None
+    )
+}
+
+fn print_update_notice_if_available() {
+    if let VersionState::UpdateAvailable { current, latest } =
+        check_version_state(UPDATE_REPO_URL, UPDATE_REPO_REF)
+    {
+        eprintln!(
+            "\nUpdate available: v{current} -> v{latest}. Run `multus update` to install it."
+        );
+    }
+}
+
+fn execute_command_with_notice(cli: Cli) -> Result<i32> {
+    let skip_notice = should_skip_update_notice(&cli);
+    let result = execute_command(cli);
+    if !skip_notice {
+        print_update_notice_if_available();
+    }
+    result
 }
 
 fn run_interactive() -> i32 {
@@ -136,7 +163,7 @@ fn run(argv: Option<Vec<String>>) -> i32 {
             Err(code) => return code,
         };
 
-        return match execute_command(cli) {
+        return match execute_command_with_notice(cli) {
             Ok(code) => code,
             Err(err) => {
                 eprintln!("Error: {err}");
@@ -151,7 +178,7 @@ fn run(argv: Option<Vec<String>>) -> i32 {
         Err(code) => return code,
     };
 
-    match execute_command(cli) {
+    match execute_command_with_notice(cli) {
         Ok(code) => code,
         Err(err) => {
             eprintln!("Error: {err}");
@@ -162,34 +189,4 @@ fn run(argv: Option<Vec<String>>) -> i32 {
 
 fn main() {
     std::process::exit(run(None));
-}
-
-#[cfg(test)]
-mod tests {
-    use super::has_pdf_extension;
-    use crate::cli::normalize_argv;
-    use crate::core::path::strip_wrapping_quotes;
-    use std::path::Path;
-
-    #[test]
-    fn strip_wrapping_quotes_handles_common_inputs() {
-        assert_eq!(strip_wrapping_quotes("\"hello\""), "hello");
-        assert_eq!(strip_wrapping_quotes("'world'"), "world");
-        assert_eq!(strip_wrapping_quotes("  no-quotes  "), "no-quotes");
-        assert_eq!(strip_wrapping_quotes("\" spaced \""), "spaced");
-    }
-
-    #[test]
-    fn has_pdf_extension_is_case_insensitive() {
-        assert!(has_pdf_extension(Path::new("file.pdf")));
-        assert!(has_pdf_extension(Path::new("file.PDF")));
-        assert!(!has_pdf_extension(Path::new("file.docx")));
-        assert!(!has_pdf_extension(Path::new("file")));
-    }
-
-    #[test]
-    fn normalize_argv_defaults_to_split_for_unknown_first_token() {
-        let normalized = normalize_argv(vec!["-i".to_string(), "doc.pdf".to_string()]);
-        assert_eq!(normalized[0], "split");
-    }
 }

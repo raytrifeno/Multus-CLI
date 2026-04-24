@@ -16,7 +16,7 @@ const DOCX_REL_NS: &str = "http://schemas.openxmlformats.org/officeDocument/2006
 const DOCX_HEADER_CONTENT_TYPE: &str =
     "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml";
 
-fn prepend_page_contents(doc: &mut Document, page_id: ObjectId, content: Vec<u8>) -> Result<()> {
+fn append_page_contents(doc: &mut Document, page_id: ObjectId, content: Vec<u8>) -> Result<()> {
     let page = doc
         .get_dictionary(page_id)
         .map_err(|e| PdfToolError::new(format!("Failed to read page dictionary: {e}")))?;
@@ -27,7 +27,7 @@ fn prepend_page_contents(doc: &mut Document, page_id: ObjectId, content: Vec<u8>
     };
 
     let content_object_id = doc.add_object(Object::Stream(Stream::new(Dictionary::new(), content)));
-    current_content_list.insert(0, Object::Reference(content_object_id));
+    current_content_list.push(Object::Reference(content_object_id));
 
     let page_mut = doc
         .get_object_mut(page_id)
@@ -132,7 +132,7 @@ fn apply_pdf_watermark(input_path: &Path, output_path: &Path, watermark_text: &s
         let cos = angle.cos();
         let sin = angle.sin();
 
-        let font_size = ((width.min(height) * 0.12).max(28.0)).min(96.0);
+        let font_size = (width.min(height) * 0.12).clamp(28.0, 96.0);
         let x = width * 0.18;
         let y = height * 0.45;
 
@@ -163,7 +163,7 @@ fn apply_pdf_watermark(input_path: &Path, output_path: &Path, watermark_text: &s
         let encoded = content
             .encode()
             .map_err(|e| PdfToolError::new(format!("Failed to encode watermark content: {e}")))?;
-        prepend_page_contents(&mut doc, page_id, encoded)?;
+        append_page_contents(&mut doc, page_id, encoded)?;
     }
 
     doc.compress();
@@ -298,10 +298,11 @@ fn ensure_docx_header_relationship(rels_xml: &mut String, target: &str) -> Resul
         };
         let rel_end = rel_start + rel_end_rel + 1;
         let tag = &rels_xml[rel_start..rel_end];
-        if tag.contains(&format!(r#"Target="{target}""#)) && tag.contains(DOCX_REL_TYPE_HEADER) {
-            if let Some(existing_id) = extract_xml_attr(tag, "Id") {
-                return Ok(existing_id);
-            }
+        if tag.contains(&format!(r#"Target="{target}""#))
+            && tag.contains(DOCX_REL_TYPE_HEADER)
+            && let Some(existing_id) = extract_xml_attr(tag, "Id")
+        {
+            return Ok(existing_id);
         }
         cursor = rel_end;
     }
@@ -314,10 +315,10 @@ fn ensure_docx_header_relationship(rels_xml: &mut String, target: &str) -> Resul
             .chars()
             .take_while(|c| c.is_ascii_digit())
             .collect::<String>();
-        if let Ok(num) = digits.parse::<u32>() {
-            if num > max_id {
-                max_id = num;
-            }
+        if let Ok(num) = digits.parse::<u32>()
+            && num > max_id
+        {
+            max_id = num;
         }
         search = start;
     }

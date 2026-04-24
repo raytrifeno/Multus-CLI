@@ -161,3 +161,16 @@ pub(crate) fn build_reordered_sequence(requested: &[u32], total_pages: usize) ->
 
     Ok(out)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{build_reordered_sequence, parse_page_order};
+
+    #[test]
+    fn reorder_rejects_duplicate_requested_pages() {
+        let order = parse_page_order("3,1,3").unwrap();
+        let result = build_reordered_sequence(&order, 4);
+
+        assert!(result.is_err());
+    }
+}

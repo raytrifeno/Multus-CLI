@@ -4,7 +4,7 @@ use clap::{Args, Parser, Subcommand};
 #[command(
     name = "multus",
     version,
-    about = "Multus: Split, Compress, Merge, Encrypt, Image Conversion, Image Format Conversion, Watermark, Reorder, Update."
+    about = "Multus: Split, Compress, Merge, Encrypt, Image Conversion, Image Format Conversion, Watermark, Reorder, Update, Uninstall."
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -25,6 +25,7 @@ pub enum Commands {
     #[command(alias = "eorder")]
     Reorder(ReorderArgs),
     Update(UpdateArgs),
+    Uninstall(UninstallArgs),
 }
 
 #[derive(Args, Debug, Default, Clone)]
@@ -141,6 +142,12 @@ pub struct UpdateArgs {
     pub branch: Option<String>,
 }
 
+#[derive(Args, Debug, Default, Clone)]
+pub struct UninstallArgs {
+    #[arg(short, long, help = "Run uninstall without asking for confirmation.")]
+    pub yes: bool,
+}
+
 pub fn normalize_argv(mut argv: Vec<String>) -> Vec<String> {
     if argv.is_empty() {
         return argv;
@@ -162,6 +169,7 @@ pub fn normalize_argv(mut argv: Vec<String>) -> Vec<String> {
             | "reorder"
             | "eorder"
             | "update"
+            | "uninstall"
             | "help"
             | "-h"
             | "--help"
@@ -175,7 +183,7 @@ pub fn normalize_argv(mut argv: Vec<String>) -> Vec<String> {
     argv
 }
 
-pub fn menu_items() -> [(&'static str, &'static str); 9] {
+pub fn menu_items() -> [(&'static str, &'static str); 10] {
     [
         ("Split pages", "split"),
         ("Compress file size", "compress"),
@@ -186,5 +194,23 @@ pub fn menu_items() -> [(&'static str, &'static str); 9] {
         ("Add watermark", "watermark"),
         ("Reorder pages", "reorder"),
         ("Update Multus", "update"),
+        ("Uninstall Multus", "uninstall"),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_argv;
+
+    #[test]
+    fn normalize_argv_defaults_to_split_for_unknown_first_token() {
+        let normalized = normalize_argv(vec!["-i".to_string(), "doc.pdf".to_string()]);
+        assert_eq!(normalized[0], "split");
+    }
+
+    #[test]
+    fn normalize_argv_keeps_uninstall_subcommand() {
+        let normalized = normalize_argv(vec!["uninstall".to_string(), "--yes".to_string()]);
+        assert_eq!(normalized[0], "uninstall");
+    }
 }

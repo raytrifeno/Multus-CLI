@@ -50,10 +50,10 @@ pub(crate) fn merge_documents(mut docs: Vec<(Option<String>, Document)>) -> Resu
             b"Pages" => {
                 if let Ok(dictionary) = object.as_dict() {
                     let mut dictionary = dictionary.clone();
-                    if let Some((_, ref old)) = pages_object {
-                        if let Ok(old_dictionary) = old.as_dict() {
-                            dictionary.extend(old_dictionary);
-                        }
+                    if let Some((_, ref old)) = pages_object
+                        && let Ok(old_dictionary) = old.as_dict()
+                    {
+                        dictionary.extend(old_dictionary);
                     }
                     pages_object = Some((
                         pages_object.map(|(id, _)| id).unwrap_or(*object_id),
@@ -111,10 +111,10 @@ pub(crate) fn merge_documents(mut docs: Vec<(Option<String>, Document)>) -> Resu
     merged.max_id = merged.objects.len() as u32;
     merged.renumber_objects();
     merged.adjust_zero_pages();
-    if let Some(outline_id) = merged.build_outline() {
-        if let Ok(catalog) = merged.catalog_mut() {
-            catalog.set("Outlines", Object::Reference(outline_id));
-        }
+    if let Some(outline_id) = merged.build_outline()
+        && let Ok(catalog) = merged.catalog_mut()
+    {
+        catalog.set("Outlines", Object::Reference(outline_id));
     }
     merged.compress();
     Ok(merged)

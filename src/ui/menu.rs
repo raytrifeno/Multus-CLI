@@ -1,6 +1,8 @@
 use crossterm::cursor::{Hide, MoveTo, Show};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
-use crossterm::style::{Attribute, Print, ResetColor, SetAttribute, SetForegroundColor};
+use crossterm::style::{
+    Attribute, Color, Print, ResetColor, SetAttribute, SetBackgroundColor, SetForegroundColor,
+};
 use crossterm::terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{execute, queue};
 use std::io::{self, Write};
@@ -8,42 +10,60 @@ use std::io::{self, Write};
 use crate::types::{PdfToolError, Result};
 use crate::ui::banner::{multus_orange, queue_multus_logo};
 
+const MENU_WIDTH: usize = 56;
+
+fn pad_line(value: &str) -> String {
+    let mut line = value.chars().take(MENU_WIDTH).collect::<String>();
+    let len = line.chars().count();
+    if len < MENU_WIDTH {
+        line.push_str(&" ".repeat(MENU_WIDTH - len));
+    }
+    line
+}
+
 fn render_arrow_menu(
     menu_items: &[(&str, &str)],
     selected_index: usize,
     version_line: &str,
-    selected_prefix: &str,
 ) -> Result<()> {
     let mut stdout = io::stdout();
-    execute!(stdout, MoveTo(0, 0), Clear(ClearType::All))
+    queue!(stdout, MoveTo(0, 0), Clear(ClearType::FromCursorDown), Hide)
         .map_err(|e| PdfToolError::new(format!("Failed to draw menu: {e}")))?;
 
     queue_multus_logo(&mut stdout)
         .map_err(|e| PdfToolError::new(format!("Failed to draw menu: {e}")))?;
     queue!(
         stdout,
-        Print("Use ↑/↓ to move, Enter to select, Esc for default Split.\nType QQ in any prompt to return here.\n")
+        SetAttribute(Attribute::Bold),
+        Print("Multus document tools\n"),
+        SetAttribute(Attribute::Reset),
+        Print("Up/Down: move  Enter: select  Esc: Split  QQ: back from prompt\n"),
+        Print("Q twice: quit\n")
     )
     .map_err(|e| PdfToolError::new(format!("Failed to draw menu: {e}")))?;
 
-    queue!(stdout, Print("\n"))
+    queue!(stdout, Print("\n"), Print("Commands\n"))
         .map_err(|e| PdfToolError::new(format!("Failed to draw menu: {e}")))?;
 
     let orange = multus_orange();
     for (index, (label, _command)) in menu_items.iter().enumerate() {
-        let numbered = format!("{}. {label}", index + 1);
+        let marker = if index == selected_index { ">" } else { " " };
+        let numbered = format!("{marker} {:02}. {label}", index + 1);
+        let line = pad_line(&numbered);
         if index == selected_index {
             queue!(
                 stdout,
-                SetForegroundColor(orange),
+                SetForegroundColor(Color::Black),
+                SetBackgroundColor(orange),
                 SetAttribute(Attribute::Bold),
-                Print(format!("{selected_prefix} {numbered}\n")),
+                Print(line),
                 SetAttribute(Attribute::Reset),
-                ResetColor
+                ResetColor,
+                Print("\n")
             )
             .map_err(|e| PdfToolError::new(format!("Failed to draw menu: {e}")))?;
         } else {
-            queue!(stdout, Print(format!("  {numbered}\n")))
+            queue!(stdout, Print(line), Print("\n"))
                 .map_err(|e| PdfToolError::new(format!("Failed to draw menu: {e}")))?;
         }
     }
@@ -51,8 +71,10 @@ fn render_arrow_menu(
     queue!(
         stdout,
         Print("\n"),
-        Print(format!("{version_line}\n")),
-        Print("Quit: press Q twice.\n")
+        SetForegroundColor(orange),
+        Print(pad_line(version_line)),
+        ResetColor,
+        Print("\n")
     )
     .map_err(|e| PdfToolError::new(format!("Failed to draw menu: {e}")))?;
     stdout
@@ -62,21 +84,9 @@ fn render_arrow_menu(
 }
 
 fn should_use_alternate_screen() -> bool {
-    if std::env::var("MULTUS_NO_ALT_SCREEN")
+    !std::env::var("MULTUS_NO_ALT_SCREEN")
         .map(|v| v == "1")
         .unwrap_or(false)
-    {
-        return false;
-    }
-    !cfg!(target_os = "linux")
-}
-
-fn selected_prefix_symbol() -> &'static str {
-    if cfg!(target_os = "linux") {
-        ">"
-    } else {
-        "❯"
-    }
 }
 
 pub(crate) fn choose_command_with_arrows(
@@ -108,10 +118,9 @@ pub(crate) fn choose_command_with_arrows(
 
     let mut selected = 0usize;
     let mut q_press_count = 0u8;
-    let selected_prefix = selected_prefix_symbol();
     let menu_result = (|| -> Result<Option<String>> {
         loop {
-            render_arrow_menu(menu_items, selected, version_line, selected_prefix)?;
+            render_arrow_menu(menu_items, selected, version_line)?;
 
             let evt = event::read()
                 .map_err(|e| PdfToolError::new(format!("Failed to read keyboard input: {e}")))?;
