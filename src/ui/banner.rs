@@ -2,16 +2,15 @@ use crossterm::queue;
 use crossterm::style::{Attribute, Color, Print, ResetColor, SetAttribute, SetForegroundColor};
 use std::io::{self, Write};
 
-const MULTUS_ASCII_LOGO_PLAIN: &[&str] = &[
-    " __  __       _ _             ",
-    "|  \\/  |_   _| | |_ _   _ ___ ",
-    "| |\\/| | | | | | __| | | / __|",
-    "| |  | | |_| | | |_| |_| \\__ \\",
-    "|_|  |_|\\__,_|_|\\__|\\__,_|___/",
-];
+const BRAND_NAME: &str = "MULTUS";
+const BRAND_TAGLINE: &str = "Document toolkit";
 
-pub(crate) fn multus_logo_lines() -> &'static [&'static str] {
-    MULTUS_ASCII_LOGO_PLAIN
+pub(crate) fn brand_name() -> &'static str {
+    BRAND_NAME
+}
+
+pub(crate) fn brand_tagline() -> &'static str {
+    BRAND_TAGLINE
 }
 
 pub(crate) fn multus_orange() -> Color {
@@ -22,29 +21,24 @@ pub(crate) fn multus_orange() -> Color {
     }
 }
 
-pub(crate) fn queue_multus_logo<W: Write>(stdout: &mut W) -> io::Result<()> {
+pub(crate) fn queue_brand_header<W: Write>(stdout: &mut W) -> io::Result<()> {
     queue!(
         stdout,
         SetForegroundColor(multus_orange()),
-        SetAttribute(Attribute::Bold)
-    )?;
-
-    for line in multus_logo_lines() {
-        queue!(stdout, Print(*line), Print("\n"))?;
-    }
-
-    queue!(
-        stdout,
+        SetAttribute(Attribute::Bold),
+        Print(BRAND_NAME),
         ResetColor,
         SetAttribute(Attribute::Reset),
-        Print("\n")
+        Print("\n"),
+        Print(BRAND_TAGLINE),
+        Print("\n\n")
     )?;
     Ok(())
 }
 
 pub(crate) fn print_banner() {
     let mut stdout = io::stdout();
-    let _ = queue_multus_logo(&mut stdout);
+    let _ = queue_brand_header(&mut stdout);
     let _ = stdout.flush();
 }
 

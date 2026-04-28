@@ -11,7 +11,7 @@ pub(crate) fn handle_images_to_pdf(args: ImagesToPdfArgs) -> Result<i32> {
     } else {
         prompt_path_list(
             "INPUT IMAGES",
-            "Enter image file paths (separate with spaces or commas): ",
+            "Enter image file paths (you can drag many files at once; separators: space/comma/semicolon): ",
         )?
     };
 

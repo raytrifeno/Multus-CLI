@@ -1,5 +1,7 @@
 use clap::{Args, Parser, Subcommand};
 
+pub type MenuItem = (&'static str, &'static str, &'static str);
+
 #[derive(Parser, Debug)]
 #[command(
     name = "multus",
@@ -183,18 +185,54 @@ pub fn normalize_argv(mut argv: Vec<String>) -> Vec<String> {
     argv
 }
 
-pub fn menu_items() -> [(&'static str, &'static str); 10] {
+pub fn menu_items() -> [MenuItem; 10] {
     [
-        ("Split pages", "split"),
-        ("Compress file size", "compress"),
-        ("Merge multiple files", "merge"),
-        ("Encrypt file with password", "encrypt"),
-        ("Convert images to PDF", "images-to-pdf"),
-        ("Convert image format (JPG/PNG)", "convert-image"),
-        ("Add watermark", "watermark"),
-        ("Reorder pages", "reorder"),
-        ("Update Multus", "update"),
-        ("Uninstall Multus", "uninstall"),
+        ("Split pages", "Select pages from one PDF", "split"),
+        (
+            "Compress file size",
+            "Reduce PDF size with quality profiles",
+            "compress",
+        ),
+        (
+            "Merge multiple files",
+            "Combine many PDFs into one output",
+            "merge",
+        ),
+        (
+            "Encrypt file with password",
+            "Protect a PDF with user and owner passwords",
+            "encrypt",
+        ),
+        (
+            "Convert images to PDF",
+            "Build a PDF from one or many images",
+            "images-to-pdf",
+        ),
+        (
+            "Convert image format",
+            "Change images to JPG or PNG",
+            "convert-image",
+        ),
+        (
+            "Add watermark",
+            "Stamp text on PDF or DOCX pages",
+            "watermark",
+        ),
+        (
+            "Reorder pages",
+            "Rebuild page order without editing the source",
+            "reorder",
+        ),
+        (
+            "Update Multus",
+            "Download and install the latest release build",
+            "update",
+        ),
+        (
+            "Uninstall Multus",
+            "Remove Multus from this machine",
+            "uninstall",
+        ),
     ]
 }
 

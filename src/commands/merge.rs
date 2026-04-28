@@ -8,7 +8,7 @@ pub(crate) fn handle_merge(args: MergeArgs) -> Result<i32> {
     } else {
         prompt_path_list(
             "INPUT FILES",
-            "Enter file paths (separate with spaces or commas): ",
+            "Enter file paths (you can drag many files at once; separators: space/comma/semicolon): ",
         )?
     };
 

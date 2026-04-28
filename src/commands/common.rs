@@ -6,12 +6,22 @@ pub(crate) fn parse_path_list(raw: &str) -> Vec<String> {
     let mut items = Vec::new();
     let mut current = String::new();
     let mut quote: Option<char> = None;
+    let mut chars = raw.chars().peekable();
 
-    for ch in raw.chars() {
+    while let Some(ch) = chars.next() {
         match ch {
+            '\\' if quote.is_none() => match chars.peek().copied() {
+                Some(next)
+                    if next.is_whitespace() || matches!(next, ',' | ';' | '"' | '\'' | '\\') =>
+                {
+                    current.push(next);
+                    let _ = chars.next();
+                }
+                _ => current.push('\\'),
+            },
             '"' | '\'' if quote == Some(ch) => quote = None,
             '"' | '\'' if quote.is_none() => quote = Some(ch),
-            ',' if quote.is_none() => push_current_path(&mut items, &mut current),
+            ',' | ';' if quote.is_none() => push_current_path(&mut items, &mut current),
             ch if ch.is_whitespace() && quote.is_none() => {
                 push_current_path(&mut items, &mut current);
             }
@@ -110,5 +120,29 @@ mod tests {
         let items = parse_path_list(r#""C:\docs\a, one.pdf", C:\docs\b.pdf"#);
 
         assert_eq!(items, vec![r#"C:\docs\a, one.pdf"#, r#"C:\docs\b.pdf"#]);
+    }
+
+    #[test]
+    fn parse_path_list_supports_shell_escaped_spaces() {
+        let items = parse_path_list("/home/me/a\\ file.pdf /home/me/b\\ file.pdf");
+
+        assert_eq!(items, vec!["/home/me/a file.pdf", "/home/me/b file.pdf"]);
+    }
+
+    #[test]
+    fn parse_path_list_supports_semicolon_delimiter() {
+        let items = parse_path_list(r#""C:\docs\a file.pdf";"C:\docs\b file.pdf""#);
+
+        assert_eq!(
+            items,
+            vec![r#"C:\docs\a file.pdf"#, r#"C:\docs\b file.pdf"#]
+        );
+    }
+
+    #[test]
+    fn parse_path_list_supports_escaped_delimiters() {
+        let items = parse_path_list(r#"C:\docs\a\,one.pdf C:\docs\b\;two.pdf"#);
+
+        assert_eq!(items, vec![r#"C:\docs\a,one.pdf"#, r#"C:\docs\b;two.pdf"#]);
     }
 }
