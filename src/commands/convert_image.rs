@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use crate::cli::ConvertImageArgs;
 use crate::commands::common::{
     default_output_name, ensure_non_empty_inputs, ensure_supported_image_input, prompt_path_list,
-    resolve_input_paths,
+    resolve_input_paths, sort_paths_naturally,
 };
 use crate::types::{PdfToolError, Result};
 
@@ -28,7 +28,8 @@ pub(crate) fn handle_convert_image(args: ConvertImageArgs) -> Result<i32> {
         )?
     };
 
-    let input_paths = resolve_input_paths(&input_values)?;
+    let mut input_paths = resolve_input_paths(&input_values)?;
+    sort_paths_naturally(&mut input_paths);
     ensure_non_empty_inputs(&input_paths, "No image files were provided.")?;
     for path in &input_paths {
         ensure_supported_image_input(path)?;
